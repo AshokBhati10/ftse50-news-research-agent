@@ -1,0 +1,264 @@
+{
+  "generated_at": "2026-10-08T17:05:00.430303Z",
+  "company_count": 5,
+  "companies": [
+    {
+      "company": "AstraZeneca",
+      "ticker": "AZN.L",
+      "market_cap": 196400000000.0,
+      "generated_at": "2026-10-08T17:05:00.427863Z",
+      "articles": [
+        {
+          "title": "AstraZeneca to acquire Fusion Therapeutics in $2.4bn oncology deal",
+          "url": "https://www.reuters.com/business/healthcare-pharmaceuticals/astrazeneca-acquire-fusion-2026-10-07/",
+          "source": "reuters.com",
+          "published_at": "2026-10-07T09:15:00Z",
+          "impact": "High",
+          "sentiment": "Neutral",
+          "reason": "Heuristic mock scoring (High impact, Neutral).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "AstraZeneca on Tuesday said it had agreed to acquire US biotechnology company Fusion Therapeutics for $2.4 billion in cash, in its biggest oncology deal this year. The acquisition adds a late-stage radiopharmaceutical candidate for prostate cancer to AstraZeneca's pipeline, with peak sales potential estimated above $3 billion. Analysts said the deal multiple looked reasonable given the scarcity value of radiopharma assets."
+        },
+        {
+          "title": "AstraZeneca Q3 earnings beat estimates by 12%, raises full-year guidance",
+          "url": "https://www.ft.com/content/azn-q3-earnings-beat-2026",
+          "source": "ft.com",
+          "published_at": "2026-10-06T07:30:00Z",
+          "impact": "High",
+          "sentiment": "Positive",
+          "reason": "Heuristic mock scoring (High impact, Positive).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "AstraZeneca reported third-quarter core earnings per share 12% ahead of analyst consensus, driven by strong oncology and rare-disease sales. The drugmaker raised its full-year guidance, now expecting high-teens revenue growth and low-twenties core EPS growth. Management cited accelerating launches in the US and China."
+        },
+        {
+          "title": "AstraZeneca declares interim dividend of $1.03 per share",
+          "url": "https://www.investorschronicle.co.uk/azn-dividend-2026",
+          "source": "investorschronicle.co.uk",
+          "published_at": "2026-10-04T08:00:00Z",
+          "impact": "Medium",
+          "sentiment": "Neutral",
+          "reason": "Heuristic mock scoring (Medium impact, Neutral).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "AstraZeneca's board declared an interim dividend of $1.03 per share, payable in December. The payout is consistent with the company's progressive dividend policy and was widely expected by analysts. No change to the full-year dividend outlook was announced."
+        }
+      ],
+      "candidates_considered": 10,
+      "providers_used": [
+        "mock"
+      ],
+      "fallback_used": false,
+      "notes": ""
+    },
+    {
+      "company": "HSBC Holdings",
+      "ticker": "HSBA.L",
+      "market_cap": 122100000000.0,
+      "generated_at": "2026-10-08T17:04:59.922448Z",
+      "articles": [
+        {
+          "title": "HSBC announces $3bn share buyback after Q3 profit beat",
+          "url": "https://www.reuters.com/business/finance/hsbc-buyback-q3-2026-10-06/",
+          "source": "reuters.com",
+          "published_at": "2026-10-06T07:00:00Z",
+          "impact": "High",
+          "sentiment": "Positive",
+          "reason": "Heuristic mock scoring (High impact, Positive).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "HSBC announced a $3 billion share buyback after third-quarter pre-tax profit came in ahead of analyst expectations. The lender credited resilient net interest income and lower-than-expected credit losses. The buyback will commence immediately and completes the capital return programme announced earlier this year."
+        },
+        {
+          "title": "HSBC raises guidance for net interest income",
+          "url": "https://www.marketwatch.com/story/hsbc-raises-nii-guidance-2026-10-06",
+          "source": "marketwatch.com",
+          "published_at": "2026-10-06T07:20:00Z",
+          "impact": "High",
+          "sentiment": "Positive",
+          "reason": "Heuristic mock scoring (High impact, Positive).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "HSBC raised its full-year guidance for net interest income, pointing to resilient deposit margins and hedging income. The upgrade implies low-single-digit upside to consensus earnings. Management cautioned that the benefit depends on the path of interest rates."
+        },
+        {
+          "title": "HSBC fined £85m by regulators over transaction monitoring failures",
+          "url": "https://www.bbc.com/news/business-hsbc-fine-2026",
+          "source": "bbc.com",
+          "published_at": "2026-10-04T12:00:00Z",
+          "impact": "High",
+          "sentiment": "Negative",
+          "reason": "Heuristic mock scoring (High impact, Negative).",
+          "confidence": 0.6,
+          "source_quality": 0.6,
+          "evidence_excerpt": "Financial regulators have fined HSBC £85 million for failures in its transaction monitoring systems over a three-year period. The bank said it had invested heavily to remediate the issues and that no financial crime was found to have occurred. The fine was already provisioned, limiting the earnings impact."
+        }
+      ],
+      "candidates_considered": 10,
+      "providers_used": [
+        "mock"
+      ],
+      "fallback_used": false,
+      "notes": ""
+    },
+    {
+      "company": "Shell",
+      "ticker": "SHEL.L",
+      "market_cap": 118700000000.0,
+      "generated_at": "2026-10-08T17:05:00.217075Z",
+      "articles": [
+        {
+          "title": "Shell raises dividend and extends $3.5bn buyback programme",
+          "url": "https://www.marketwatch.com/story/shell-dividend-buyback-2026-10-06",
+          "source": "marketwatch.com",
+          "published_at": "2026-10-06T07:35:00Z",
+          "impact": "High",
+          "sentiment": "Positive",
+          "reason": "Heuristic mock scoring (High impact, Positive).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "Shell raised its quarterly dividend by 4% and extended its $3.5 billion share buyback programme into next quarter. The moves underscore the balance sheet strength despite the earnings miss. Total shareholder distributions this year are on track for record levels."
+        },
+        {
+          "title": "Shell approves $6bn Gulf of Mexico deepwater oil project",
+          "url": "https://www.reuters.com/business/energy/shell-gulf-mexico-project-2026-10-07/",
+          "source": "reuters.com",
+          "published_at": "2026-10-07T10:00:00Z",
+          "impact": "Medium",
+          "sentiment": "Neutral",
+          "reason": "Heuristic mock scoring (Medium impact, Neutral).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "Shell has approved a $6 billion deepwater oil project in the Gulf of Mexico, its largest upstream sanction this year. The project is expected to produce 120,000 barrels per day at peak and deliver strong returns at current prices. First oil is targeted for late 2029."
+        },
+        {
+          "title": "Shell Q3 earnings miss on weaker refining margins",
+          "url": "https://www.ft.com/content/shell-q3-miss-2026",
+          "source": "ft.com",
+          "published_at": "2026-10-06T07:10:00Z",
+          "impact": "Medium",
+          "sentiment": "Negative",
+          "reason": "Heuristic mock scoring (Medium impact, Negative).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "Shell reported third-quarter adjusted earnings below analyst expectations, hit by sharply weaker refining margins and lower gas trading results. Upstream production was steady. The company maintained its dividend and buyback pace, but analysts trimmed near-term forecasts."
+        }
+      ],
+      "candidates_considered": 10,
+      "providers_used": [
+        "mock"
+      ],
+      "fallback_used": false,
+      "notes": ""
+    },
+    {
+      "company": "Unilever",
+      "ticker": "ULVR.L",
+      "market_cap": 104300000000.0,
+      "generated_at": "2026-10-08T17:05:00.118456Z",
+      "articles": [
+        {
+          "title": "Unilever Q3 sales beat expectations, raises margin guidance",
+          "url": "https://www.ft.com/content/unilever-q3-sales-beat-2026",
+          "source": "ft.com",
+          "published_at": "2026-10-05T07:20:00Z",
+          "impact": "Medium",
+          "sentiment": "Positive",
+          "reason": "Heuristic mock scoring (Medium impact, Positive).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "Unilever reported third-quarter underlying sales growth ahead of expectations, with volumes returning to growth. The consumer goods giant raised its full-year underlying operating margin guidance. Management credited premiumisation and easing input cost inflation."
+        },
+        {
+          "title": "Unilever confirms quarterly dividend",
+          "url": "https://www.investorschronicle.co.uk/unilever-dividend-2026",
+          "source": "investorschronicle.co.uk",
+          "published_at": "2026-10-02T08:00:00Z",
+          "impact": "Medium",
+          "sentiment": "Neutral",
+          "reason": "Heuristic mock scoring (Medium impact, Neutral).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "Unilever confirmed its quarterly dividend, payable next month. The payout is unchanged from the prior quarter and in line with expectations. The shares yield around 3.5%."
+        },
+        {
+          "title": "Broker upgrades Unilever to buy on margin recovery",
+          "url": "https://www.marketwatch.com/story/unilever-upgrade-2026-10-07",
+          "source": "marketwatch.com",
+          "published_at": "2026-10-07T10:30:00Z",
+          "impact": "Medium",
+          "sentiment": "Positive",
+          "reason": "Heuristic mock scoring (Medium impact, Positive).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "A leading broker has upgraded Unilever to buy from hold, arguing that margin recovery is underappreciated. The new price target implies double-digit upside. Risks cited include volume softness in emerging markets."
+        }
+      ],
+      "candidates_considered": 10,
+      "providers_used": [
+        "mock"
+      ],
+      "fallback_used": false,
+      "notes": ""
+    },
+    {
+      "company": "Rolls-Royce Holdings",
+      "ticker": "RR.L",
+      "market_cap": 68900000000.0,
+      "generated_at": "2026-10-08T17:05:00.274043Z",
+      "articles": [
+        {
+          "title": "Rolls-Royce raises profit guidance after strong first half",
+          "url": "https://www.ft.com/content/rolls-royce-guidance-raise-2026",
+          "source": "ft.com",
+          "published_at": "2026-10-06T07:15:00Z",
+          "impact": "Medium",
+          "sentiment": "Positive",
+          "reason": "Heuristic mock scoring (Medium impact, Positive).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "Rolls-Royce raised its full-year underlying operating profit guidance after a strong first half driven by civil aerospace aftermarket growth. Large engine flying hours continued to recover. The company also upgraded its free cash flow outlook."
+        },
+        {
+          "title": "Rolls-Royce reinstates dividend after five-year pause",
+          "url": "https://www.marketwatch.com/story/rolls-royce-dividend-2026-10-06",
+          "source": "marketwatch.com",
+          "published_at": "2026-10-06T07:45:00Z",
+          "impact": "Medium",
+          "sentiment": "Neutral",
+          "reason": "Heuristic mock scoring (Medium impact, Neutral).",
+          "confidence": 0.6,
+          "source_quality": 0.8,
+          "evidence_excerpt": "Rolls-Royce reinstated its dividend for the first time in five years, declaring an interim payout. The move signals confidence in the balance sheet recovery. The board said future payouts would be progressive but prudent."
+        },
+        {
+          "title": "Rolls-Royce wins £9bn UK nuclear submarine propulsion contract",
+          "url": "https://www.reuters.com/business/aerospace-defense/rolls-royce-submarine-contract-2026-10-07/",
+          "source": "reuters.com",
+          "published_at": "2026-10-07T08:00:00Z",
+          "impact": "Low",
+          "sentiment": "Positive",
+          "reason": "Heuristic mock scoring (Low impact, Positive).",
+          "confidence": 0.45,
+          "source_quality": 0.8,
+          "evidence_excerpt": "Rolls-Royce has won a £9 billion contract to design and build nuclear propulsion systems for the UK's next-generation submarines. The multi-decade deal secures thousands of jobs in Derby. Analysts said the contract underpins long-term defence revenue visibility."
+        }
+      ],
+      "candidates_considered": 10,
+      "providers_used": [
+        "mock"
+      ],
+      "fallback_used": false,
+      "notes": ""
+    }
+  ],
+  "config_snapshot": {
+    "top_n_articles": 3,
+    "max_articles_per_company": 10,
+    "dedup_similarity_threshold": 0.85,
+    "news_lookback_days": 14,
+    "embedding_model": "all-MiniLM-L6-v2",
+    "ollama_model": "(mock)"
+  }
+}
