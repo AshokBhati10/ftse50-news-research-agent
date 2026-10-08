@@ -1,0 +1,191 @@
+{
+  "duplicate_detection": [
+    {
+      "name": "syndicated_earnings_pair",
+      "inputs": {
+        "text_a": "AstraZeneca beats Q3 forecasts and lifts guidance. The drugmaker reported core earnings 12 percent ahead of consensus.",
+        "text_b": "AstraZeneca beats Q3 forecasts, lifts guidance — drugmaker reports core earnings 12% ahead of consensus."
+      },
+      "expected_duplicate": true,
+      "note": "Syndication-style: same story, lightly edited (measured sim ~0.98 with all-MiniLM-L6-v2)."
+    },
+    {
+      "name": "syndicated_miss_pair",
+      "inputs": {
+        "text_a": "Shell misses profit forecasts as refining margins weaken. Adjusted earnings came in below consensus estimates.",
+        "text_b": "Shell has missed profit forecasts for the quarter, with weaker refining margins dragging adjusted earnings below expectations."
+      },
+      "expected_duplicate": true,
+      "note": "Same event, different outlet rewrite (measured sim ~0.90)."
+    },
+    {
+      "name": "distinct_stories",
+      "inputs": {
+        "text_a": "AstraZeneca to acquire Fusion Therapeutics in $2.4bn oncology deal.",
+        "text_b": "AstraZeneca declares interim dividend of $1.03 per share."
+      },
+      "expected_duplicate": false,
+      "note": "Genuinely different stories (measured sim ~0.56)."
+    },
+    {
+      "name": "distinct_hsbc_stories",
+      "inputs": {
+        "text_a": "HSBC announces $3bn share buyback after Q3 profit beat.",
+        "text_b": "HSBC fined £85m by regulators over transaction monitoring failures."
+      },
+      "expected_duplicate": false,
+      "note": "Genuinely different stories (measured sim ~0.46)."
+    }
+  ],
+  "impact_classification": [
+    {
+      "expected": "High",
+      "inputs": {
+        "snippet": "AstraZeneca said it agreed to acquire US biotech Fusion Therapeutics for $2.4 billion in cash.",
+        "title": "AstraZeneca to acquire Fusion Therapeutics in $2.4bn oncology deal"
+      },
+      "name": "acquisition_is_high"
+    },
+    {
+      "expected": "High",
+      "inputs": {
+        "snippet": "AstraZeneca reported third-quarter core earnings 12% ahead of consensus and raised full-year guidance.",
+        "title": "AstraZeneca Q3 earnings beat estimates by 12%, raises full-year guidance"
+      },
+      "name": "earnings_beat_is_high"
+    },
+    {
+      "expected": "High",
+      "inputs": {
+        "snippet": "HSBC said it would cut its dividend after a sharp rise in credit losses.",
+        "title": "HSBC in shock dividend cut as credit losses mount"
+      },
+      "name": "dividend_cut_is_high"
+    },
+    {
+      "expected": "Medium",
+      "inputs": {
+        "snippet": "Unilever reported better-than-expected quarterly sales and raised its margin guidance.",
+        "title": "Unilever Q3 sales beat expectations, raises margin guidance"
+      },
+      "name": "sales_beat_is_medium"
+    },
+    {
+      "expected": "Low",
+      "inputs": {
+        "snippet": "AstraZeneca declared an interim dividend of $1.03 per share, in line with its progressive dividend policy.",
+        "title": "AstraZeneca declares interim dividend of $1.03 per share"
+      },
+      "name": "routine_dividend_is_low"
+    },
+    {
+      "expected": "Low",
+      "inputs": {
+        "snippet": "AstraZeneca was among the risers as the FTSE 100 opened higher on Tuesday.",
+        "title": "FTSE 100 movers: AstraZeneca edges higher in morning trade"
+      },
+      "name": "market_movers_is_low"
+    }
+  ],
+  "sentiment_classification": [
+    {
+      "expected": "Positive",
+      "inputs": {
+        "snippet": "AstraZeneca said it agreed to acquire US biotech Fusion Therapeutics for $2.4 billion in cash.",
+        "title": "AstraZeneca to acquire Fusion Therapeutics in $2.4bn oncology deal"
+      },
+      "name": "acquisition_positive"
+    },
+    {
+      "expected": "Positive",
+      "inputs": {
+        "snippet": "Rolls-Royce raised its full-year profit guidance following a strong first half.",
+        "title": "Rolls-Royce raises profit guidance after strong first half"
+      },
+      "name": "guidance_raise_positive"
+    },
+    {
+      "expected": "Negative",
+      "inputs": {
+        "snippet": "Shell's third-quarter earnings missed expectations as refining margins weakened sharply.",
+        "title": "Shell Q3 earnings miss on weaker refining margins"
+      },
+      "name": "earnings_miss_negative"
+    },
+    {
+      "expected": "Negative",
+      "inputs": {
+        "snippet": "Regulators fined HSBC £85 million for failures in transaction monitoring systems.",
+        "title": "HSBC fined £85m by regulators"
+      },
+      "name": "fine_negative"
+    },
+    {
+      "expected": "Neutral",
+      "inputs": {
+        "snippet": "HSBC named a new chief risk officer, effective next quarter.",
+        "title": "HSBC appoints new chief risk officer"
+      },
+      "name": "appointment_neutral"
+    },
+    {
+      "expected": "Neutral",
+      "inputs": {
+        "snippet": "AstraZeneca declared an interim dividend of $1.03 per share.",
+        "title": "AstraZeneca declares interim dividend"
+      },
+      "name": "dividend_neutral"
+    }
+  ],
+  "source_quality": [
+    {
+      "expected_tier": "reputable",
+      "inputs": {
+        "url": "https://www.reuters.com/business/healthcare-pharmaceuticals/astrazeneca-acquire-2026/"
+      },
+      "min_score": 0.8,
+      "name": "reuters_reputable"
+    },
+    {
+      "expected_tier": "reputable",
+      "inputs": {
+        "url": "https://www.ft.com/content/abc123"
+      },
+      "min_score": 0.8,
+      "name": "ft_reputable"
+    },
+    {
+      "expected_tier": "mainstream",
+      "inputs": {
+        "url": "https://www.bbc.com/news/business-123"
+      },
+      "min_score": 0.6,
+      "name": "bbc_mainstream"
+    },
+    {
+      "expected_tier": "official",
+      "inputs": {
+        "url": "https://www.londonstockexchange.com/news/article/xyz"
+      },
+      "min_score": 1.0,
+      "name": "lse_official"
+    },
+    {
+      "expected_tier": "other",
+      "inputs": {
+        "url": "https://random-finance-blog-xyz.example.com/post/1"
+      },
+      "min_score": 0.4,
+      "name": "unknown_other"
+    },
+    {
+      "name": "investors_chronicle_reputable_not_official",
+      "inputs": {
+        "url": "https://www.investorschronicle.co.uk/azn-dividend-2026"
+      },
+      "expected_tier": "reputable",
+      "min_score": 0.8,
+      "note": "Regression: 'investor' substring must not imply an official IR page."
+    }
+  ]
+}
