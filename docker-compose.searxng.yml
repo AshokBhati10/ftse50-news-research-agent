@@ -1,0 +1,33 @@
+# ---------------------------------------------------------------------------
+# Self-hosted SearXNG for the FTSE 50 Market News Research Agent.
+#
+# Usage:
+#   docker compose -f docker-compose.searxng.yml up -d
+#   # then set SEARXNG_BASE_URL=http://localhost:8080 in your .env
+#
+# Notes:
+# - No paid service required. The JSON API used by the agent (/search?format=json)
+#   is enabled by default in this compose file.
+# - If you already run SearXNG elsewhere, skip this file and just point
+#   SEARXNG_BASE_URL at your instance.
+# ---------------------------------------------------------------------------
+
+services:
+  searxng:
+    image: searxng/searxng:2026.3.10-58dcd2c9f
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng-settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - BASE_URL=http://localhost:8080/
+      - INSTANCE_NAME=ftse50-searxng
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE

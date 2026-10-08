@@ -1,0 +1,55 @@
+# Secrets / credentials — never commit
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# uv
+.uv/
+uv-cache/
+
+# Test / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Data caches and generated output (sample output lives in examples/)
+data/cache/
+data/output/
+logs/
+*.log
+
+# Model / embedding caches (large, re-downloadable)
+models/
+*.bin
+*.onnx
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.bak
+tmp/
+temp/

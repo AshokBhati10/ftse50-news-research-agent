@@ -1,0 +1,12 @@
+# Minimal SearXNG settings for the FTSE 50 agent.
+# Enables the JSON API (/search?format=json) used by nodes/search.py.
+use_default_settings: true
+server:
+  secret_key: "change-me-to-a-random-secret"
+  limiter: false
+  image_proxy: false
+search:
+  formats:
+    - html
+    - json
+  autocomplete: ""
