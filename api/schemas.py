@@ -11,7 +11,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +54,8 @@ class CompaniesResponse(BaseModel):
 class ReportSummary(BaseModel):
     id: str                          # e.g. "report_2026-10-10"
     date: str                        # YYYY-MM-DD
+    title: str = ""                  # user query for query reports, else id
+    report_type: str = "ftse"        # "ftse" | "query"
     generated_at: datetime | None = None
     company_count: int = 0
     article_count: int = 0
@@ -85,9 +87,28 @@ class ReportCompany(BaseModel):
     articles: list[ReportArticle] = Field(default_factory=list)
 
 
+class QueryFindingOut(BaseModel):
+    title: str
+    url: str
+    source: str
+    published_at: datetime | None = None
+    relevance: float = 0.0
+    key_finding: str = ""
+    significance: str = ""
+    impact: str
+    sentiment: str
+    reason: str = ""
+    confidence: float = 0.0
+    source_quality: float | None = None
+    evidence_excerpt: str = ""
+
+
 class ReportDetail(BaseModel):
     summary: ReportSummary
-    companies: list[ReportCompany]
+    companies: list[ReportCompany] = Field(default_factory=list)  # legacy FTSE
+    findings: list[QueryFindingOut] = Field(default_factory=list)  # query mode
+    query: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     has_markdown: bool = False
 
 
@@ -110,6 +131,27 @@ class RunStatus(str, Enum):
 
 
 class ResearchRunCreate(BaseModel):
+    # Query-driven research (primary). Mutually exclusive with tickers.
+    query: str | None = Field(
+        default=None,
+        description="Arbitrary research question or topic, e.g. "
+                    "'Latest developments in semiconductor stocks'.",
+        max_length=500,
+    )
+    max_results: int | None = Field(
+        default=None, ge=1, le=50,
+        description="Max articles to analyse for a query run (default 20).",
+    )
+    time_range: str | None = Field(
+        default=None,
+        description="Recency bias for query search: day | week | month | year.",
+        pattern="^(day|week|month|year)$",
+    )
+    fresh_search: bool = Field(
+        default=False,
+        description="Bypass cached search results for this query run.",
+    )
+    # Legacy FTSE company research (secondary).
     tickers: list[str] | None = Field(
         default=None,
         description="Subset of FTSE 50 tickers to research (e.g. ['AZN.L']). "
@@ -119,6 +161,25 @@ class ResearchRunCreate(BaseModel):
     limit_companies: int | None = Field(default=None, ge=1, le=60)
     agentic: bool = False
     no_cache: bool = False
+
+    @field_validator("query")
+    @classmethod
+    def _strip_query(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            raise ValueError("Query must not be empty or whitespace-only.")
+        return v
+
+    @model_validator(mode="after")
+    def _mutually_exclusive(self) -> "ResearchRunCreate":
+        if self.query and self.tickers:
+            raise ValueError("Provide either 'query' or 'tickers', not both.")
+        if self.query and self.agentic:
+            raise ValueError("Agentic mode is only supported for FTSE company "
+                             "research, not for query-driven runs.")
+        return self
 
 
 class CompanyProgress(BaseModel):
@@ -131,6 +192,10 @@ class CompanyProgress(BaseModel):
 class ResearchRunOut(BaseModel):
     run_id: str
     status: RunStatus
+    mode: str = "companies"              # "companies" | "query"
+    query: str | None = None             # original user query (query mode)
+    stage: str | None = None             # current pipeline stage (query mode)
+    stats: dict[str, Any] = Field(default_factory=dict)  # counts etc. (query mode)
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None

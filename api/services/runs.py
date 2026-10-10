@@ -78,6 +78,11 @@ class _RunState:
     report_id: str | None = None
     companies: list[dict[str, Any]] = field(default_factory=list)
     request: dict[str, Any] = field(default_factory=dict)
+    # Query-driven research:
+    mode: str = "companies"              # "companies" | "query"
+    query: str | None = None
+    stage: str | None = None            # current pipeline stage (query mode)
+    stats: dict[str, Any] = field(default_factory=dict)
     # Runtime-only (never persisted):
     queue: asyncio.Queue = field(default_factory=asyncio.Queue, repr=False)
     task: asyncio.Task | None = field(default=None, repr=False)
@@ -86,6 +91,10 @@ class _RunState:
         return ResearchRunOut(
             run_id=self.run_id,
             status=self.status,
+            mode=self.mode,
+            query=self.query,
+            stage=self.stage,
+            stats=self.stats,
             created_at=self.created_at,
             started_at=self.started_at,
             finished_at=self.finished_at,
@@ -116,6 +125,10 @@ class _RunState:
             "report_id": self.report_id,
             "companies": self.companies,
             "request": self.request,
+            "mode": self.mode,
+            "query": self.query,
+            "stage": self.stage,
+            "stats": self.stats,
         }
         return d
 
@@ -138,6 +151,10 @@ class _RunState:
             report_id=data.get("report_id"),
             companies=data.get("companies", []),
             request=data.get("request", {}),
+            mode=data.get("mode", "companies"),
+            query=data.get("query"),
+            stage=data.get("stage"),
+            stats=data.get("stats", {}),
         )
 
 
@@ -189,6 +206,7 @@ class RunManager:
                     "Live research runs need an Ollama-compatible endpoint; "
                     "see Settings for details."
                 )
+            mode = "query" if req.query else "companies"
             tickers = None
             if req.tickers:
                 tickers = [normalize_ticker(t) for t in req.tickers]
@@ -203,7 +221,13 @@ class RunManager:
             run_id = f"run_{utcnow().strftime('%Y%m%d_%H%M%S')}_{secrets.token_hex(3)}"
             state = _RunState(
                 run_id=run_id,
+                mode=mode,
+                query=req.query,
                 request={
+                    "query": req.query,
+                    "max_results": req.max_results or 20,
+                    "time_range": req.time_range or "month",
+                    "fresh_search": req.fresh_search,
                     "tickers": tickers,
                     "limit_companies": req.limit_companies,
                     "agentic": req.agentic,
@@ -261,9 +285,6 @@ class RunManager:
     # -- execution ----------------------------------------------------------
     async def _execute(self, state: _RunState, settings) -> None:
         from config.settings import Settings
-        from nodes.ingestion import build_ftse50
-        from nodes.output import build_full_report, write_reports
-        from nodes.runner import execute_research_run
         from utils.cache import CacheManager
 
         req = state.request
@@ -277,64 +298,10 @@ class RunManager:
             cache = CacheManager(live_settings.cache_dir,
                                  enabled=not req.get("no_cache"))
 
-            companies = await build_ftse50(live_settings, cache)
-            self.set_company_cache(companies)
-            wanted = req.get("tickers")
-            if wanted:
-                wanted_set = set(wanted)
-                companies = [c for c in companies if c.ticker.upper() in wanted_set]
-            if req.get("limit_companies"):
-                companies = companies[: req["limit_companies"]]
-            if not companies:
-                raise InvalidRunRequestError("No companies matched the request.")
-
-            state.total_companies = len(companies)
-            self._persist(state)
-
-            def _on_company_complete(report) -> None:
-                state.current_company = report.ticker
-                ok = bool(report.articles)
-                if ok:
-                    state.completed += 1
-                else:
-                    state.failed += 1
-                state.articles_found += len(report.articles)
-                state.companies.append({
-                    "ticker": report.ticker,
-                    "status": "completed" if ok else "failed",
-                    "articles": len(report.articles),
-                    "notes": (report.notes or "")[:300],
-                })
-                self._persist(state)
-                self._emit(state, {
-                    "type": "company_complete",
-                    "ticker": report.ticker,
-                    "completed": state.completed,
-                    "failed": state.failed,
-                    "total": state.total_companies,
-                    "articles_found": state.articles_found,
-                })
-
-            reports = await execute_research_run(
-                companies, live_settings, cache,
-                agentic=bool(req.get("agentic")),
-                on_company_complete=_on_company_complete,
-            )
-
-            full = build_full_report(reports, live_settings)
-            json_path, _md_path = write_reports(full, live_settings.output_dir)
-            # If the operator cancelled mid-flight, _execute was aborted above;
-            # reaching here means a genuine finish.
-            if state.status == RunStatus.CANCELLED:
-                return
-            state.status = RunStatus.COMPLETED
-            state.finished_at = utcnow()
-            state.report_id = json_path.stem
-            state.current_company = None
-            self._persist(state)
-            self._emit(state, {"type": "completed", "run": state.to_out().model_dump(mode="json")})
-            log.info("Run %s completed: %d companies, report %s",
-                     state.run_id, len(reports), state.report_id)
+            if state.mode == "query":
+                await self._execute_query(state, live_settings, cache)
+            else:
+                await self._execute_companies(state, live_settings, cache)
         except asyncio.CancelledError:
             # cancel() already set status/persisted/emitted; just exit quietly.
             if state.status not in TERMINAL:
@@ -353,6 +320,116 @@ class RunManager:
             state.error = str(exc) or "Research run failed."
             self._persist(state)
             self._emit(state, {"type": "failed", "run": state.to_out().model_dump(mode="json")})
+
+    async def _execute_query(self, state: _RunState, settings, cache) -> None:
+        """Query-driven research run with honest stage-level progress."""
+        from nodes.output import write_query_reports
+        from nodes.runner import execute_query_research
+
+        req = state.request
+
+        def _on_stage(stage: str, info: dict) -> None:
+            state.stage = stage
+            state.stats = {**state.stats, stage: info}
+            if stage == "analyze":
+                state.articles_found = info.get("findings", 0)
+            self._persist(state)
+            self._emit(state, {"type": "stage", "stage": stage,
+                               "run": state.to_out().model_dump(mode="json")})
+
+        report = await execute_query_research(
+            state.query or "",
+            settings,
+            cache,
+            run_id=state.run_id,
+            max_results=int(req.get("max_results") or 20),
+            time_range=req.get("time_range") or "month",
+            fresh=bool(req.get("fresh_search")),
+            on_stage=_on_stage,
+        )
+
+        json_path, _md_path = write_query_reports(report, settings.output_dir)
+        if state.status == RunStatus.CANCELLED:
+            return  # a concurrent cancel won the race; keep its verdict
+        state.status = RunStatus.COMPLETED
+        state.finished_at = utcnow()
+        state.report_id = json_path.stem
+        state.stage = "done"
+        state.stats = {**state.stats, **report.counts,
+                       "warnings": report.warnings,
+                       "from_cache": report.search_config.get("from_cache"),
+                       "providers": report.search_config.get("providers_used")}
+        state.articles_found = len(report.findings)
+        self._persist(state)
+        self._emit(state, {"type": "completed", "run": state.to_out().model_dump(mode="json")})
+        log.info("Query run %s completed: %d findings, report %s",
+                 state.run_id, len(report.findings), state.report_id)
+
+    async def _execute_companies(self, state: _RunState, settings, cache) -> None:
+        """Legacy FTSE 50 company research run (unchanged behavior)."""
+        from nodes.ingestion import build_ftse50
+        from nodes.output import build_full_report, write_reports
+        from nodes.runner import execute_research_run
+
+        req = state.request
+        companies = await build_ftse50(settings, cache)
+        self.set_company_cache(companies)
+        wanted = req.get("tickers")
+        if wanted:
+            wanted_set = set(wanted)
+            companies = [c for c in companies if c.ticker.upper() in wanted_set]
+        if req.get("limit_companies"):
+            companies = companies[: req["limit_companies"]]
+        if not companies:
+            raise InvalidRunRequestError("No companies matched the request.")
+
+        state.total_companies = len(companies)
+        self._persist(state)
+
+        def _on_company_complete(report) -> None:
+            state.current_company = report.ticker
+            ok = bool(report.articles)
+            if ok:
+                state.completed += 1
+            else:
+                state.failed += 1
+            state.articles_found += len(report.articles)
+            state.companies.append({
+                "ticker": report.ticker,
+                "status": "completed" if ok else "failed",
+                "articles": len(report.articles),
+                "notes": (report.notes or "")[:300],
+            })
+            self._persist(state)
+            self._emit(state, {
+                "type": "company_complete",
+                "ticker": report.ticker,
+                "completed": state.completed,
+                "failed": state.failed,
+                "total": state.total_companies,
+                "articles_found": state.articles_found,
+            })
+
+        reports = await execute_research_run(
+            companies, settings, cache,
+            agentic=bool(req.get("agentic")),
+            on_company_complete=_on_company_complete,
+        )
+
+        full = build_full_report(reports, settings)
+        json_path, _md_path = write_reports(full, settings.output_dir)
+        # If the operator cancelled mid-flight, _execute was aborted above;
+        # reaching here means a genuine finish.
+        if state.status == RunStatus.CANCELLED:
+            return
+        state.status = RunStatus.COMPLETED
+        state.finished_at = utcnow()
+        state.report_id = json_path.stem
+        state.current_company = None
+        self._persist(state)
+        self._emit(state, {"type": "completed", "run": state.to_out().model_dump(mode="json")})
+        log.info("Run %s completed: %d companies, report %s",
+                 state.run_id, len(reports), state.report_id)
 
     # -- helpers ------------------------------------------------------------
     def _emit(self, state: _RunState, event: dict) -> None:

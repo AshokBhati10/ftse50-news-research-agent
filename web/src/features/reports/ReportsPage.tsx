@@ -6,6 +6,7 @@ import { api } from "../../lib/api";
 import type { ReportsResponse } from "../../types";
 import { formatDateTime } from "../../lib/format";
 import {
+  Badge,
   Button,
   Card,
   CardHeader,
@@ -69,12 +70,19 @@ export default function ReportsPage() {
             {data.reports.map((r) => (
               <tr key={r.id} className="border-b border-terminal-border/50 last:border-0 hover:bg-white/[0.02]">
                 <td className="px-5 py-3">
-                  <Link to={`/reports/${r.id}`} className="font-mono text-xs text-indigo-300 hover:underline">
-                    {r.id}
-                  </Link>
-                  <div className="mt-0.5 max-w-[320px] truncate text-xs text-terminal-faint">
-                    {r.companies.slice(0, 6).join(", ")}
-                    {r.companies.length > 6 ? ` +${r.companies.length - 6} more` : ""}
+                  <div className="flex items-center gap-2">
+                    <Link to={`/reports/${r.id}`} className="font-medium text-white hover:underline">
+                      {r.title || r.id}
+                    </Link>
+                    <Badge tone={r.report_type === "query" ? "info" : "neutral"}>
+                      {r.report_type === "query" ? "query" : "FTSE 50"}
+                    </Badge>
+                  </div>
+                  <div className="mt-0.5 max-w-[320px] truncate font-mono text-xs text-terminal-faint">
+                    {r.report_type === "query" ? r.id : (
+                      <>{r.companies.slice(0, 6).join(", ")}
+                      {r.companies.length > 6 ? ` +${r.companies.length - 6} more` : ""}</>
+                    )}
                   </div>
                 </td>
                 <td className="whitespace-nowrap px-3 py-3 text-xs text-terminal-muted">

@@ -141,6 +141,22 @@ uv run python main.py --evaluate              # Pydantic Evals suite
 uv run pytest                                 # unit tests
 ```
 
+Query-driven research (no company list needed):
+
+```bash
+uv run python main.py --query "Latest developments in semiconductor stocks"
+uv run python main.py --query "Impact of interest rates on UK banks" \
+    --max-results 10 --time-range week --fresh
+```
+
+`--query` runs the same search → extract → dedup → LLM pipeline driven by the
+free-text query: query-aware SearXNG search (raw query first, then at most two
+deterministic variants), topic-namespaced cache keys, one batched LLM call that
+scores *relevance to the query* plus key findings, significance, impact and
+confidence, and a `report_type: "query"` JSON + Markdown report. `--fresh`
+bypasses cached search results for the query. Agentic mode is not supported
+for `--query` runs.
+
 Reports land in `data/output/report_YYYY-MM-DD.{json,md}` (a numeric suffix is
 added instead of overwriting when a report for the same day already exists).
 
@@ -159,11 +175,17 @@ A dark financial-terminal-style dashboard (React 18 + TypeScript + Vite +
 Tailwind, Recharts, Lucide) backed by a small FastAPI layer that drives the
 **same** Python pipeline the CLI uses — no duplicated research logic.
 
-Pages: **Overview** (summary cards, key-articles table, sentiment/impact/
-coverage charts), **Research Runs** (company picker + options form, live
-SSE progress, run history), **Reports** (library, search/filter/sort, JSON +
-Markdown downloads), **Companies** (real FTSE 50 universe with coverage from
-the latest report), **Settings** (service health and non-secret config status).
+Pages: **Overview** (research CTA, recent runs, latest query report or FTSE
+digest with charts), **Research Runs** (query form with examples, fresh-search
+toggle, advanced options, live SSE stage progress, run history), **Reports**
+(library with query titles, search/filter/sort, JSON + Markdown downloads),
+**Companies** (optional FTSE 50 reference directory), **Settings** (service
+health and non-secret config status).
+
+The primary experience is **query-driven research**: type any question or
+topic on the Research Runs page and the agent searches the live web, extracts,
+analyses and ranks — no FTSE company selection required. The legacy FTSE 50
+company workflow remains available as a secondary mode.
 
 ```bash
 # 1. Python API (from the repo root; uses the same uv environment and .env)
@@ -182,7 +204,11 @@ Backend tests: `uv run pytest` (includes `tests/test_api_*.py`).
 
 Key API endpoints: `GET /api/health`, `GET /api/companies`,
 `GET /api/reports`, `GET /api/reports/latest`, `GET /api/reports/{id}`,
-`GET /api/reports/{id}/download?format=json|md`, `POST /api/research-runs`,
+`GET /api/reports/{id}/download?format=json|md`,
+`POST /api/research-runs` (body: `{"query": "...", "max_results": 20,
+"time_range": "month"|"week"|"day"|"year", "fresh_search": true}` for
+query-driven research, or the legacy `{"tickers": [...], "limit_companies": N,
+"agentic": bool, "no_cache": bool}` for FTSE company research),
 `GET /api/research-runs`, `GET /api/research-runs/{id}`,
 `GET /api/research-runs/{id}/events` (SSE), `POST /api/research-runs/{id}/cancel`,
 `GET /api/settings/status`.
@@ -192,6 +218,13 @@ Notes:
 - Only **one research run may be active at a time** (second `POST` → 409);
   cancelling keeps honest partial results. Run state is persisted under
   `data/cache/runs/` so a browser refresh never loses track of a run.
+- Query runs stream honest pipeline stages over SSE
+  (`search → extract → deduplicate → analyze → report`); legacy company runs
+  stream per-company progress as before.
+- Query search cache keys are namespaced by the normalized query plus time
+  range and result limit — different queries never share cache entries.
+  `fresh_search: true` bypasses cached search results for that run (the UI
+  shows whether results came from cache).
 - Live runs require `OLLAMA_API_KEY` (the API rejects run creation without
   it); tickers are validated against the backend's FTSE 50 list.
 - The Settings page reports *whether* the LLM/search services are configured

@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from config.settings import Settings
-from utils.models import CompanyReport, FullReport
+from utils.models import CompanyReport, FullReport, QueryFinding, QueryReport
 
 log = logging.getLogger(__name__)
 
@@ -99,16 +99,10 @@ def render_markdown(report: FullReport) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def write_reports(report: FullReport, output_dir: str | Path) -> tuple[Path, Path]:
-    """Write JSON + Markdown reports. Returns (json_path, md_path)."""
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    date_str = report.generated_at.strftime("%Y-%m-%d")
-
+def _unique_report_paths(output_dir: Path, date_str: str) -> tuple[Path, Path]:
+    """JSON + Markdown paths; never silently clobber a same-day report."""
     json_path = output_dir / f"report_{date_str}.json"
     md_path = output_dir / f"report_{date_str}.md"
-    # Never silently clobber a previous report from the same day: suffix
-    # with a counter (report_2026-10-10_2.json, …).
     if json_path.exists() or md_path.exists():
         n = 2
         while (output_dir / f"report_{date_str}_{n}.json").exists() or (
@@ -117,10 +111,183 @@ def write_reports(report: FullReport, output_dir: str | Path) -> tuple[Path, Pat
             n += 1
         json_path = output_dir / f"report_{date_str}_{n}.json"
         md_path = output_dir / f"report_{date_str}_{n}.md"
+    return json_path, md_path
+
+
+def write_reports(report: FullReport, output_dir: str | Path) -> tuple[Path, Path]:
+    """Write JSON + Markdown reports. Returns (json_path, md_path)."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    date_str = report.generated_at.strftime("%Y-%m-%d")
+
+    json_path, md_path = _unique_report_paths(output_dir, date_str)
 
     payload = report.model_dump(mode="json")
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     md_path.write_text(render_markdown(report), encoding="utf-8")
+
+    log.info("Wrote %s and %s", json_path, md_path)
+    return json_path, md_path
+
+
+# ---------------------------------------------------------------------------
+# Query-driven research reports
+# ---------------------------------------------------------------------------
+
+def build_query_report(
+    *,
+    query: str,
+    run_id: str,
+    started_at: datetime,
+    outcome,  # TopicSearchOutcome
+    findings: list[QueryFinding],
+    counts: dict,
+    warnings: list[str],
+    settings: Settings,
+) -> QueryReport:
+    """Assemble the machine-readable query report with full research metadata."""
+    return QueryReport(
+        query=query.strip(),
+        run_id=run_id,
+        started_at=started_at,
+        search_config={
+            "queries_used": outcome.queries_used,
+            "time_range": outcome.time_range,
+            "max_results": counts.get("max_results"),
+            "fresh_search": outcome.fresh_search,
+            "from_cache": outcome.from_cache,
+            "providers_used": outcome.providers_used,
+            "fallback_used": outcome.fallback_used,
+        },
+        warnings=warnings,
+        counts=counts,
+        findings=findings,
+        config_snapshot={
+            "max_results": counts.get("max_results"),
+            "time_range": outcome.time_range,
+            "dedup_similarity_threshold": settings.dedup_similarity_threshold,
+            "embedding_model": settings.embedding_model,
+            "ollama_model": settings.ollama_model or "(mock)",
+        },
+    )
+
+
+def _executive_summary(report: QueryReport) -> str:
+    """Deterministic summary derived from the ranked findings (no extra LLM)."""
+    c = report.counts
+    n = len(report.findings)
+    if n == 0:
+        return (
+            f"No relevant articles could be analysed for this query. "
+            f"{c.get('collected', 0)} search results were collected, "
+            f"{c.get('extracted', 0)} extracted. "
+            "Try a broader query or disable fresh search to reuse cached results."
+        )
+    high = sum(1 for f in report.findings if f.impact.value == "High")
+    top = report.findings[0]
+    return (
+        f"{n} relevant finding{'s' if n != 1 else ''} from "
+        f"{c.get('extracted', 0)} extracted articles "
+        f"({c.get('collected', 0)} collected, {c.get('duplicates_removed', 0)} "
+        f"duplicates removed{f', {high} high-impact' if high else ''}). "
+        f"Top finding: {top.key_finding}"
+    )
+
+
+def render_query_markdown(report: QueryReport) -> str:
+    date_str = report.generated_at.strftime("%Y-%m-%d")
+    cfg = report.search_config
+    c = report.counts
+    lines = [
+        f"# Research Report — {date_str}",
+        "",
+        f"> **Query:** {report.query}",
+        "",
+        "## Research metadata",
+        "",
+        f"- Run ID: `{report.run_id}`",
+        f"- Started: {report.started_at.strftime('%Y-%m-%d %H:%M UTC') if report.started_at else 'n/a'}",
+        f"- Completed: {report.generated_at.strftime('%Y-%m-%d %H:%M UTC')}",
+        f"- Search queries used: {len(cfg.get('queries_used', []))}",
+        f"- Time range: {cfg.get('time_range', 'n/a')}",
+        f"- Fresh search: {'yes' if cfg.get('fresh_search') else 'no'}"
+        f" (results {'came from cache' if cfg.get('from_cache') else 'were freshly retrieved'})",
+        f"- Providers: {', '.join(cfg.get('providers_used', [])) or 'none'}"
+        + (" (fallback used)" if cfg.get("fallback_used") else ""),
+        f"- Articles: {c.get('collected', 0)} collected → "
+        f"{c.get('extracted', 0)} extracted → "
+        f"{c.get('analyzed', 0)} analyzed "
+        f"({c.get('duplicates_removed', 0)} duplicates removed)",
+        f"- Model: {report.config_snapshot.get('ollama_model')}",
+        "",
+        "## Executive summary",
+        "",
+        _executive_summary(report),
+        "",
+        "## Key findings",
+        "",
+    ]
+    if not report.findings:
+        lines.append("_No findings. See limitations below._")
+        lines.append("")
+    else:
+        lines.append("| # | Finding | Relevance | Impact |")
+        lines.append("|---|---------|-----------|--------|")
+        for j, f in enumerate(report.findings, start=1):
+            lines.append(
+                f"| {j} | {f.key_finding} | {f.relevance:.2f} | "
+                f"{_IMPACT_BADGE.get(f.impact.value, f.impact.value)} |"
+            )
+        lines.append("")
+
+    if report.findings:
+        lines.append("## Ranked results")
+        lines.append("")
+        for j, f in enumerate(report.findings, start=1):
+            sentiment = _SENTIMENT_BADGE.get(f.sentiment.value, f.sentiment.value)
+            lines.append(f"### {j}. {f.title}")
+            lines.append("")
+            lines.append(f"- Relevance: **{f.relevance:.2f}** · "
+                         f"Impact: **{f.impact.value}** · Sentiment: {sentiment} "
+                         f"(confidence {f.confidence:.2f})")
+            lines.append(f"- Key finding: {f.key_finding}")
+            lines.append(f"- Significance: {f.significance}")
+            lines.append(f"- Why this ranking: {f.reason}")
+            lines.append(f"- Source: {f.source or 'unknown'} · {_fmt_date(f.published_at)}")
+            if f.evidence_excerpt:
+                excerpt = " ".join(f.evidence_excerpt.split())[:280]
+                lines.append(f"- Evidence: _{excerpt}…_")
+            lines.append(f"- Link: {f.url}")
+            lines.append("")
+
+    lines.append("## Source links")
+    lines.append("")
+    for f in report.findings:
+        lines.append(f"- [{f.title}]({f.url}) — {f.source or 'unknown'}")
+    if not report.findings:
+        lines.append("_No sources collected._")
+    lines.append("")
+    lines.append("## Limitations and warnings")
+    lines.append("")
+    if report.warnings:
+        for w in report.warnings:
+            lines.append(f"- {w}")
+    else:
+        lines.append("- None recorded.")
+    lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def write_query_reports(report: QueryReport, output_dir: str | Path) -> tuple[Path, Path]:
+    """Write JSON + Markdown for a query report. Returns (json_path, md_path)."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    date_str = report.generated_at.strftime("%Y-%m-%d")
+    json_path, md_path = _unique_report_paths(output_dir, date_str)
+
+    payload = report.model_dump(mode="json")
+    json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    md_path.write_text(render_query_markdown(report), encoding="utf-8")
 
     log.info("Wrote %s and %s", json_path, md_path)
     return json_path, md_path

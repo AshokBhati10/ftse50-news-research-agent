@@ -51,6 +51,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Run the Pydantic Evals suite and exit.")
     p.add_argument("--agentic", action="store_true",
                    help="Let the Pydantic AI agent drive per-company research via tools.")
+    p.add_argument("--query", type=str, default="",
+                   help="Query-driven research: arbitrary topic/question instead of "
+                        "FTSE companies, e.g. --query 'Latest developments in "
+                        "semiconductor stocks'.")
+    p.add_argument("--max-results", type=int, default=20,
+                   help="Max articles to analyse for --query (1-50, default: 20).")
+    p.add_argument("--time-range", type=str, default="month",
+                   choices=["day", "week", "month", "year"],
+                   help="Recency bias for --query search (default: month).")
+    p.add_argument("--fresh", action="store_true",
+                   help="With --query: bypass cached search results.")
     p.add_argument("--no-cache", action="store_true", help="Disable all caching.")
     p.add_argument("--output-dir", type=str, default="",
                    help="Override output directory for reports.")
@@ -106,6 +117,41 @@ from nodes.runner import execute_research_run, run_company_pipeline  # noqa: F40
 # Orchestration
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Query-driven research (CLI)
+# ---------------------------------------------------------------------------
+
+async def _run_query(args: argparse.Namespace, settings: Settings,
+                     cache: CacheManager) -> int:
+    """Execute a query-driven research run from the CLI."""
+    from datetime import datetime, timezone
+    from nodes.output import write_query_reports
+    from nodes.runner import QUERY_STAGES, execute_query_research
+
+    query = args.query.strip()
+    log.info("Researching query: %r (max_results=%d, time_range=%s, fresh=%s)",
+             query, args.max_results, args.time_range, args.fresh)
+
+    def _on_stage(stage: str, info: dict) -> None:
+        log.info("[query:%s] %s", stage, {k: v for k, v in info.items()
+                                          if k in ("collected", "extracted",
+                                                   "candidates", "findings",
+                                                   "duplicates_removed")})
+
+    run_id = f"cli_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    report = await execute_query_research(
+        query, settings, cache, run_id=run_id,
+        max_results=args.max_results, time_range=args.time_range,
+        fresh=args.fresh, on_stage=_on_stage,
+    )
+    json_path, md_path = write_query_reports(report, settings.output_dir)
+    log.info("Done: %d findings for %r.", len(report.findings), query)
+    log.info("Wrote %s and %s", json_path, md_path)
+    for w in report.warnings:
+        log.warning("warning: %s", w)
+    return 0
+
+
 async def amain(args: argparse.Namespace) -> int:
     from nodes.deduplication import build_deduper
     from nodes.ingestion import build_ftse50
@@ -117,6 +163,20 @@ async def amain(args: argparse.Namespace) -> int:
 
     cache = CacheManager(settings.cache_dir, enabled=not args.no_cache)
     use_mock = args.mock
+
+    # Query-driven research takes precedence over the company workflow.
+    if args.query != "" and not args.query.strip():
+        log.error("--query must not be blank.")
+        return 2
+    if args.query.strip():
+        if args.agentic:
+            log.error("--agentic is only supported for FTSE company research, not --query.")
+            return 2
+        if not 1 <= args.max_results <= 50:
+            log.error("--max-results must be between 1 and 50.")
+            return 2
+        settings.require_live_llm()
+        return await _run_query(args, settings, cache)
 
     if use_mock:
         companies, mock_map = load_mock_companies(settings)

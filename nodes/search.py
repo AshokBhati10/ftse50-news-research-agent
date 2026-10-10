@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 import httpx
 import yfinance as yf
 from dateutil import parser as date_parser
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config.settings import Settings
 from utils import query_builder
@@ -354,6 +354,152 @@ async def search_company_news(
         articles=articles[: max_results * 2],  # headroom for dedup/crawl stages
         providers_used=sorted(set(providers)),
         fallback_used=fallback_used,
+        notes="; ".join(notes),
+    )
+    if cache:
+        cache.search.set("search", cache_key, outcome.model_dump(mode="json"))
+    return outcome
+
+
+# ---------------------------------------------------------------------------
+# Query-driven topic search
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+TIME_RANGE_DAYS = {"day": 1, "week": 7, "month": 31, "year": 365}
+VALID_TIME_RANGES = tuple(TIME_RANGE_DAYS)
+
+
+def normalize_query(query: str) -> str:
+    """Canonical form for cache keys: trimmed, single-spaced, lowercased."""
+    return _re.sub(r"\s+", " ", query.strip().lower())
+
+
+def build_topic_queries(query: str, limit: int = 3) -> list[str]:
+    """Small deterministic query expansion for a user topic.
+
+    The raw query always goes first; at most ``limit`` variants are produced.
+    No LLM call — cheap, explainable, and bounded.
+    """
+    q = query.strip()
+    lowered = q.lower()
+    variants = [q]
+    if "latest" not in lowered and "recent" not in lowered:
+        variants.append(f"{q} latest news")
+    if "news" not in lowered:
+        variants.append(f"{q} news developments")
+    return variants[:limit]
+
+
+class TopicSearchOutcome(BaseModel):
+    query: str
+    queries_used: list[str] = Field(default_factory=list)
+    articles: list[Article]
+    providers_used: list[str] = Field(default_factory=list)
+    fallback_used: bool = False
+    fresh_search: bool = False
+    from_cache: bool = False
+    time_range: str = "month"
+    notes: str = ""
+
+
+def topic_cache_key(query: str, time_range: str, max_results: int) -> str:
+    """Cache key namespaced by the *normalized query* plus search options.
+
+    Different queries never share an entry; neither do different time ranges
+    or result limits for the same query.
+    """
+    return f"topic:{normalize_query(query)}:{time_range}:{max_results}"
+
+
+async def search_topic(
+    query: str,
+    settings: Settings,
+    cache: CacheManager | None = None,
+    *,
+    max_results: int = 20,
+    time_range: str = "month",
+    fresh: bool = False,
+) -> TopicSearchOutcome:
+    """Query-driven web search: SearXNG primary, You.com fallback when needed.
+
+    Never raises for search-provider problems: worst case the outcome carries
+    whatever articles could be assembled, with notes explaining what failed.
+    ``fresh=True`` bypasses cached search results for this request (fresh
+    results are still written to the cache for later reuse).
+    """
+    if time_range not in VALID_TIME_RANGES:
+        raise ValueError(f"Unsupported time_range: {time_range!r} "
+                         f"(expected one of {VALID_TIME_RANGES})")
+    query = query.strip()
+    if not query:
+        raise ValueError("Query must not be empty")
+
+    cache_key = topic_cache_key(query, time_range, max_results)
+    if cache and not fresh:
+        hit = cache.search.get("search", cache_key)
+        if hit:
+            log.info("[topic] using cached search results for %r (%d articles)",
+                     query[:60], len(hit.get("articles", [])))
+            return TopicSearchOutcome(**{**hit, "from_cache": True, "fresh_search": False})
+
+    min_useful = settings.min_useful_search_results
+    queries = build_topic_queries(query)
+    articles: list[Article] = []
+    providers: list[str] = []
+    fallback_used = False
+    notes: list[str] = []
+    queries_used: list[str] = []
+
+    for i, q in enumerate(queries):
+        try:
+            found = await searxng_search(q, settings, max_results=max_results,
+                                         time_range=time_range)
+            queries_used.append(q)
+            before = len(articles)
+            articles = dedup_by_url(articles + found)
+            providers.append("searxng")
+            log.info("[topic] SearXNG %r: +%d (%d total)", q[:60],
+                     len(articles) - before, len(articles))
+            if len(articles) >= min_useful:
+                break  # enough results; skip further expansion (cost discipline)
+        except SearchError as exc:
+            notes.append(f"SearXNG failed for {q!r}: {exc}")
+            log.warning("[topic] %s", exc)
+
+    # Fallback: You.com on the raw query, only when still insufficient.
+    if len(articles) < min_useful:
+        if settings.you_api_key:
+            try:
+                fb = await youcom_search(query, settings, max_results=max_results)
+                articles = dedup_by_url(articles + fb)
+                providers.append("you.com")
+                fallback_used = True
+                log.info("[topic] You.com fallback: %d total", len(articles))
+            except SearchError as exc:
+                notes.append(f"You.com fallback failed: {exc}")
+                log.warning("[topic] %s", exc)
+        else:
+            notes.append("You.com fallback skipped: YOU_API_KEY not configured")
+
+    # Deterministic recency filter governed by the requested time range.
+    cutoff_days = TIME_RANGE_DAYS[time_range]
+    before_filter = len(articles)
+    articles = [a for a in articles if _recent_enough(a.published_at, cutoff_days)]
+    if len(articles) < before_filter:
+        log.info("[topic] recency filter (%s): %d -> %d",
+                 time_range, before_filter, len(articles))
+
+    outcome = TopicSearchOutcome(
+        query=query,
+        queries_used=queries_used,
+        articles=articles[: max_results * 2],  # headroom for dedup/crawl stages
+        providers_used=sorted(set(providers)),
+        fallback_used=fallback_used,
+        fresh_search=fresh,
+        from_cache=False,
+        time_range=time_range,
         notes="; ".join(notes),
     )
     if cache:

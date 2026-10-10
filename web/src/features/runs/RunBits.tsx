@@ -113,7 +113,18 @@ export function useRunLive(runId: string | undefined) {
   return { run, error, streaming, setRun };
 }
 
+export const QUERY_STAGE_LABELS: Record<string, string> = {
+  search: "Searching the web",
+  extract: "Extracting articles",
+  deduplicate: "Deduplicating",
+  analyze: "Analysing with LLM",
+  report: "Writing report",
+  done: "Done",
+};
+
 export function RunProgressCard({ run }: { run: ResearchRun }) {
+  if (run.mode === "query") return <QueryRunProgressCard run={run} />;
+
   const done = run.completed + run.failed;
   const active = !isTerminal(run.status);
   const remaining = Math.max(0, run.total_companies - done);
@@ -238,4 +249,116 @@ function Info({
       </dd>
     </div>
   );
+}
+
+const QUERY_STAGE_ORDER = ["search", "extract", "deduplicate", "analyze", "report"];
+
+export function QueryRunProgressCard({ run }: { run: ResearchRun }) {
+  const active = !isTerminal(run.status);
+  const stats = run.stats as Record<string, Record<string, unknown> | unknown>;
+  const counts = {
+    collected: num(stats["search"], "collected"),
+    extracted: num(stats["extract"], "extracted"),
+    candidates: num(stats["deduplicate"], "candidates"),
+    findings: num(stats["analyze"], "findings"),
+  };
+  const currentIdx = run.stage ? QUERY_STAGE_ORDER.indexOf(run.stage) : -1;
+
+  return (
+    <Card>
+      <CardHeader
+        title="Query research"
+        subtitle={run.query ?? ""}
+        action={<RunStatusBadge status={run.status} />}
+      />
+      <div className="space-y-4 px-5 py-4">
+        {/* Honest stage tracker — no invented percentages */}
+        <ol className="space-y-2">
+          {QUERY_STAGE_ORDER.map((s, i) => {
+            const done = currentIdx > i || run.stage === "done";
+            const current = run.stage === s && active;
+            return (
+              <li key={s} className="flex items-center gap-3 text-sm">
+                <span
+                  className={cn(
+                    "flex h-5 w-5 items-center justify-center rounded-full border text-[10px]",
+                    done
+                      ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-300"
+                      : current
+                        ? "animate-pulse-dot border-indigo-400/60 bg-indigo-500/10 text-indigo-300"
+                        : "border-terminal-border text-terminal-faint"
+                  )}
+                >
+                  {done ? "✓" : i + 1}
+                </span>
+                <span className={cn(done || current ? "text-white" : "text-terminal-faint")}>
+                  {QUERY_STAGE_LABELS[s]}
+                </span>
+                {s === "search" && counts.collected > 0 && (
+                  <span className="text-xs text-terminal-faint">{counts.collected} collected</span>
+                )}
+                {s === "extract" && counts.extracted > 0 && (
+                  <span className="text-xs text-terminal-faint">{counts.extracted} extracted</span>
+                )}
+                {s === "deduplicate" && counts.candidates > 0 && (
+                  <span className="text-xs text-terminal-faint">{counts.candidates} candidates</span>
+                )}
+                {s === "analyze" && counts.findings > 0 && (
+                  <span className="text-xs text-terminal-faint">{counts.findings} findings</span>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+
+        <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <Info label="Findings" value={String(run.articles_found)} />
+          <Info
+            label="Finished"
+            value={run.finished_at ? formatDateTime(run.finished_at) : "—"}
+          />
+          <Info
+            label="Report"
+            value={
+              run.report_id ? (
+                <Link
+                  to={`/reports/${run.report_id}`}
+                  className="font-mono text-xs text-indigo-300 underline"
+                >
+                  {run.report_id}
+                </Link>
+              ) : (
+                "—"
+              )
+            }
+          />
+          <Info
+            label="Fresh search"
+            value={run.request?.fresh_search ? "yes" : "no"}
+          />
+        </dl>
+
+        {run.error && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3.5 py-3 text-sm text-red-200">
+            {run.error}
+          </div>
+        )}
+
+        {active && (
+          <p className="flex items-center gap-1.5 text-xs text-terminal-faint">
+            <Radio className="h-3.5 w-3.5 text-indigo-400" />
+            Live updates via server-sent events
+          </p>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function num(stage: unknown, key: string): number {
+  if (typeof stage === "object" && stage !== null) {
+    const v = (stage as Record<string, unknown>)[key];
+    return typeof v === "number" ? v : 0;
+  }
+  return 0;
 }

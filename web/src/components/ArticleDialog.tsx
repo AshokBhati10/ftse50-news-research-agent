@@ -41,6 +41,9 @@ export default function ArticleDialog({
       {article && (
         <div className="animate-fade-slide-in">
           <div className="mb-4 flex flex-wrap items-center gap-2">
+            {article.relevance != null && (
+              <Badge tone="info">{Math.round(article.relevance * 100)}% relevant</Badge>
+            )}
             <Badge tone={sentimentTone(article.sentiment)}>{article.sentiment}</Badge>
             <Badge tone={impactTone(article.impact)}>{article.impact} impact</Badge>
             <span className="text-xs text-terminal-muted">
@@ -49,10 +52,12 @@ export default function ArticleDialog({
           </div>
 
           <dl className="divide-y divide-terminal-border/60">
-            <Row label="Company">
-              {article.company}{" "}
-              <span className="font-mono text-xs text-terminal-muted">{article.ticker}</span>
-            </Row>
+            {(article.company || article.ticker) && (
+              <Row label="Company">
+                {article.company}{" "}
+                <span className="font-mono text-xs text-terminal-muted">{article.ticker}</span>
+              </Row>
+            )}
             <Row label="Source">
               {article.source || hostOf(article.url)}{" "}
               {article.source_quality_tier && (
@@ -68,6 +73,24 @@ export default function ArticleDialog({
               <span className="font-mono text-xs">{article.report_id}</span>
             </Row>
           </dl>
+
+          {article.key_finding && (
+            <div className="mt-4">
+              <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-terminal-faint">
+                Key finding
+              </h4>
+              <p className="text-sm leading-relaxed text-terminal-text">{article.key_finding}</p>
+            </div>
+          )}
+
+          {article.significance && (
+            <div className="mt-4">
+              <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-terminal-faint">
+                Why it matters
+              </h4>
+              <p className="text-sm leading-relaxed text-terminal-text">{article.significance}</p>
+            </div>
+          )}
 
           {article.reason && (
             <div className="mt-4">

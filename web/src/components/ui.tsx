@@ -162,6 +162,10 @@ export function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={cn(inputBase, props.className)} />;
 }
 
+export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return <textarea {...props} className={cn(inputBase, "min-h-[96px] resize-y", props.className)} />;
+}
+
 export function SelectInput(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return <select {...props} className={cn(inputBase, props.className)} />;
 }
@@ -183,6 +187,46 @@ export function Checkbox({
         {hint && <span className="mt-0.5 block text-xs text-terminal-faint">{hint}</span>}
       </span>
     </label>
+  );
+}
+
+export function Toggle({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-md border border-terminal-border bg-terminal-bg px-3 py-2.5 text-left hover:border-indigo-400/50"
+    >
+      <span>
+        <span className="block text-sm font-medium text-terminal-text">{label}</span>
+        {hint && <span className="mt-0.5 block text-xs text-terminal-faint">{hint}</span>}
+      </span>
+      <span
+        className={cn(
+          "relative h-6 w-11 shrink-0 rounded-full transition-colors",
+          checked ? "bg-indigo-500" : "bg-white/10"
+        )}
+      >
+        <span
+          className={cn(
+            "absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all",
+            checked ? "left-[22px]" : "left-0.5"
+          )}
+        />
+      </span>
+    </button>
   );
 }
 

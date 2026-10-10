@@ -9,6 +9,7 @@ import { api } from "../../lib/api";
 import type { Company, ReportDetail } from "../../types";
 import { formatMarketCap } from "../../lib/format";
 import {
+  Alert,
   Badge,
   Card,
   CardHeader,
@@ -87,10 +88,19 @@ export default function CompaniesPage() {
   if (!companies) return <LoadingState message="Loading company universe…" />;
 
   return (
-    <Card>
-      <CardHeader
-        title={`FTSE 50 companies (${companies.length})`}
-        subtitle={
+    <div className="space-y-4">
+      <Alert tone="info">
+        The FTSE 50 directory is optional reference data — research no longer requires
+        selecting a company.{" "}
+        <Link to="/runs" className="underline">
+          Start a research query
+        </Link>{" "}
+        to research any topic.
+      </Alert>
+      <Card>
+        <CardHeader
+          title={`FTSE 50 companies (${companies.length})`}
+          subtitle={
           report
             ? `Coverage from ${report.summary.id}`
             : "No report available yet — coverage data will appear after the first run"
@@ -182,5 +192,6 @@ export default function CompaniesPage() {
         </p>
       </div>
     </Card>
+    </div>
   );
 }

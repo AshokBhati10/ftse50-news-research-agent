@@ -95,6 +95,10 @@ export default function ReportDetailPage() {
   if (error) return <ErrorState message={error} />;
   if (!report) return <LoadingState message="Loading report…" />;
 
+  if (report.summary.report_type === "query") {
+    return <QueryReportView report={report} />;
+  }
+
   const failedCompanies = report.companies.filter((c) => c.articles.length === 0);
 
   return (
@@ -214,6 +218,204 @@ export default function ReportDetailPage() {
       </Card>
 
       <ArticleDialog article={selected} onClose={() => setSelected(null)} />
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ * Query-driven report view
+ * ------------------------------------------------------------------------- */
+
+function QueryReportView({ report }: { report: ReportDetail }) {
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<ArticleWithCompany | null>(null);
+  const meta = report.metadata as {
+    run_id?: string;
+    started_at?: string;
+    search_config?: Record<string, unknown>;
+    warnings?: string[];
+    counts?: Record<string, unknown>;
+  };
+  const cfg = (meta.search_config ?? {}) as Record<string, unknown>;
+  const counts = (meta.counts ?? {}) as Record<string, unknown>;
+  const warnings = (meta.warnings ?? []) as string[];
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return report.findings;
+    return report.findings.filter((f) =>
+      `${f.title} ${f.key_finding} ${f.significance} ${f.source}`.toLowerCase().includes(q)
+    );
+  }, [report.findings, query]);
+
+  const toDialog = (f: (typeof report.findings)[number]): ArticleWithCompany => ({
+    title: f.title,
+    url: f.url,
+    source: f.source,
+    published_at: f.published_at,
+    impact: f.impact,
+    sentiment: f.sentiment,
+    confidence: f.confidence,
+    reason: f.reason,
+    evidence_excerpt: f.evidence_excerpt,
+    source_quality: f.source_quality,
+    source_quality_tier: null,
+    company: "",
+    ticker: "",
+    report_id: report.summary.id,
+    relevance: f.relevance,
+    key_finding: f.key_finding,
+    significance: f.significance,
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <Link to="/reports" className="inline-flex items-center gap-1.5 text-sm text-terminal-muted hover:text-white">
+          <ArrowLeft className="h-4 w-4" /> Reports
+        </Link>
+        <Badge tone="info">query research</Badge>
+        <div className="ml-auto flex gap-2">
+          <a href={api.downloadUrl(report.summary.id, "json")} download>
+            <Button variant="secondary" className="text-xs"><Download className="h-3.5 w-3.5" /> JSON</Button>
+          </a>
+          {report.has_markdown && (
+            <a href={api.downloadUrl(report.summary.id, "md")} download>
+              <Button variant="secondary" className="text-xs"><Download className="h-3.5 w-3.5" /> Markdown</Button>
+            </a>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-xl font-semibold text-white">{report.query}</h2>
+        <p className="mt-1 font-mono text-xs text-terminal-faint">{report.summary.id}</p>
+      </div>
+
+      {warnings.length > 0 && (
+        <Alert>
+          <ul className="list-disc space-y-1 pl-4">
+            {warnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
+        </Alert>
+      )}
+
+      <Card>
+        <CardHeader title="Research metadata" />
+        <dl className="grid gap-3 px-5 py-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          <Meta label="Run ID" value={String(meta.run_id ?? "—")} mono />
+          <Meta label="Time range" value={String(cfg.time_range ?? "—")} />
+          <Meta
+            label="Search freshness"
+            value={cfg.fresh_search ? "Fresh search" : cfg.from_cache ? "From cache" : "—"}
+          />
+          <Meta
+            label="Providers"
+            value={(cfg.providers_used as string[])?.join(", ") || "—"}
+          />
+          <Meta label="Collected" value={String(counts.collected ?? "—")} />
+          <Meta label="Extracted" value={String(counts.extracted ?? "—")} />
+          <Meta label="Duplicates removed" value={String(counts.duplicates_removed ?? "—")} />
+          <Meta label="Analysed" value={String(counts.analyzed ?? "—")} />
+        </dl>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title={`Ranked findings (${visible.length})`}
+          subtitle="Ordered by relevance to your question"
+        />
+        <div className="border-b border-terminal-border px-5 py-4">
+          <div className="relative max-w-md">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-terminal-faint" />
+            <TextInput
+              placeholder="Filter findings…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+        </div>
+        {visible.length === 0 ? (
+          <EmptyState
+            title={report.findings.length === 0 ? "No findings" : "No matches"}
+            message={
+              report.findings.length === 0
+                ? "The agent could not extract analysable articles for this query. Check the warnings above."
+                : "No findings match your filter."
+            }
+          />
+        ) : (
+          <ol className="divide-y divide-terminal-border/60">
+            {visible.map((f, i) => (
+              <li key={f.url} className="px-5 py-4">
+                <div className="flex items-start gap-4">
+                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10 font-mono text-xs text-indigo-300">
+                    {i + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <button
+                      onClick={() => setSelected(toDialog(f))}
+                      className="text-left font-medium text-white hover:underline"
+                    >
+                      {f.title}
+                    </button>
+                    <p className="mt-1 text-sm text-terminal-text">
+                      <span className="text-terminal-faint">Key finding: </span>
+                      {f.key_finding}
+                    </p>
+                    {f.significance && (
+                      <p className="mt-0.5 text-sm text-terminal-muted">
+                        <span className="text-terminal-faint">Why it matters: </span>
+                        {f.significance}
+                      </p>
+                    )}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 text-xs text-terminal-muted">
+                        Relevance
+                        <span className="h-1.5 w-20 overflow-hidden rounded-full bg-white/10">
+                          <span
+                            className="block h-full rounded-full bg-indigo-400"
+                            style={{ width: `${Math.round(f.relevance * 100)}%` }}
+                          />
+                        </span>
+                        <span className="tabular-nums">{Math.round(f.relevance * 100)}%</span>
+                      </span>
+                      <Badge tone={impactTone(f.impact)}>{f.impact}</Badge>
+                      <Badge tone={sentimentTone(f.sentiment)}>{f.sentiment}</Badge>
+                      <span className="text-xs text-terminal-faint">
+                        {formatConfidence(f.confidence)} confidence · {f.source || hostOf(f.url)} ·{" "}
+                        {formatDate(f.published_at)}
+                      </span>
+                      <a
+                        href={f.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-indigo-300 hover:underline"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" /> Source
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </Card>
+
+      <ArticleDialog article={selected} onClose={() => setSelected(null)} />
+    </div>
+  );
+}
+
+function Meta({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div>
+      <dt className="text-[11px] uppercase tracking-wide text-terminal-faint">{label}</dt>
+      <dd className={cn("mt-0.5 text-terminal-text", mono && "font-mono text-xs")}>{value}</dd>
     </div>
   );
 }

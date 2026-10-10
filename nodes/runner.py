@@ -19,7 +19,7 @@ from collections.abc import Callable
 
 from config.settings import Settings
 from utils.cache import CacheManager
-from utils.models import Article, Company, CompanyReport
+from utils.models import Article, Company, CompanyReport, QueryReport
 
 log = logging.getLogger(__name__)
 
@@ -153,3 +153,118 @@ async def execute_research_run(
                     len(reports), len(companies))
         raise
     return reports
+
+
+# ---------------------------------------------------------------------------
+# Query-driven research orchestration
+# ---------------------------------------------------------------------------
+
+QUERY_STAGES = ("search", "extract", "deduplicate", "analyze", "report")
+
+
+async def execute_query_research(
+    query: str,
+    settings: Settings,
+    cache: CacheManager,
+    *,
+    run_id: str = "",
+    max_results: int = 20,
+    time_range: str = "month",
+    fresh: bool = False,
+    on_stage: Callable[[str, dict], None] | None = None,
+) -> QueryReport:
+    """Run the full query-driven pipeline: search -> extract -> dedup -> analyze.
+
+    ``on_stage`` receives ``(stage_name, info)`` as each stage completes, so
+    the API can stream honest progress (stage names in ``QUERY_STAGES``).
+    Per-stage failures degrade gracefully: search/crawl problems yield fewer
+    (or zero) findings with warnings, never a crash. ``CancelledError``
+    propagates for cooperative cancellation.
+    """
+    from datetime import datetime, timezone
+    from nodes.analysis import AnalysisError, analyze_query
+    from nodes.crawl import extract_articles
+    from nodes.deduplication import build_deduper
+    from nodes.output import build_query_report
+    from nodes.search import search_topic
+    from utils.source_quality import rank_by_source_quality
+
+    query = query.strip()
+    if not query:
+        raise ValueError("Query must not be empty")
+    started_at = datetime.now(timezone.utc)
+    warnings: list[str] = []
+
+    def _emit(stage: str, info: dict) -> None:
+        if on_stage is not None:
+            on_stage(stage, info)
+
+    # --- search -----------------------------------------------------------
+    outcome = await search_topic(
+        query, settings, cache,
+        max_results=max_results, time_range=time_range, fresh=fresh,
+    )
+    if outcome.notes:
+        warnings.extend(n for n in outcome.notes.split("; ") if n)
+    if outcome.from_cache:
+        warnings.append("Search results were served from cache (fresh search off).")
+    _emit("search", {
+        "queries_used": outcome.queries_used,
+        "collected": len(outcome.articles),
+        "providers": outcome.providers_used,
+        "from_cache": outcome.from_cache,
+    })
+    collected = len(outcome.articles)
+
+    # --- source-quality rank + extraction ----------------------------------
+    rank_by_source_quality(outcome.articles)
+    pool = outcome.articles[: max_results + 5]
+    extracted = await extract_articles(pool, settings, cache)
+    _emit("extract", {"extracted": len(extracted), "attempted": len(pool)})
+    extraction_failures = sum(1 for a in extracted if a.extraction_status == "failed")
+    if extraction_failures:
+        warnings.append(f"{extraction_failures} article(s) failed extraction "
+                        "and were excluded.")
+
+    # --- semantic dedup ----------------------------------------------------
+    deduper = build_deduper(settings)
+    deduped = await deduper.deduplicate_async(extracted)
+    duplicates_removed = len(extracted) - len(deduped)
+    # Failed extractions carry no usable text; exclude from analysis but count.
+    analyzable = [a for a in deduped if a.extraction_status != "failed"]
+    excluded_failed = len(deduped) - len(analyzable)
+    if excluded_failed:
+        warnings.append(f"{excluded_failed} article(s) had no extractable text "
+                        "and were excluded from analysis.")
+    candidates = analyzable[:max_results]
+    _emit("deduplicate", {
+        "candidates": len(candidates),
+        "duplicates_removed": duplicates_removed,
+    })
+
+    # --- LLM analysis -------------------------------------------------------
+    findings: list = []
+    if candidates:
+        try:
+            findings = await analyze_query(query, candidates, settings, cache)
+        except AnalysisError as exc:
+            warnings.append(str(exc))
+            log.error("[query] %s — returning partial report", exc)
+    else:
+        warnings.append("No extractable articles found for this query.")
+    _emit("analyze", {"findings": len(findings)})
+
+    counts = {
+        "max_results": max_results,
+        "collected": collected,
+        "extracted": len(extracted),
+        "duplicates_removed": duplicates_removed,
+        "analyzed": len(candidates),
+    }
+    report = build_query_report(
+        query=query, run_id=run_id, started_at=started_at,
+        outcome=outcome, findings=findings, counts=counts,
+        warnings=warnings, settings=settings,
+    )
+    _emit("report", {"findings": len(findings)})
+    return report

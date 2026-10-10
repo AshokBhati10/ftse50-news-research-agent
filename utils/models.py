@@ -120,3 +120,68 @@ class FullReport(BaseModel):
 
 # Backwards/forwards compatibility alias used by older prompt sketches.
 NewsAnalysis = AnalysisResult
+
+
+# ---------------------------------------------------------------------------
+# Query-driven research models
+# ---------------------------------------------------------------------------
+
+class QueryArticleScore(BaseModel):
+    """Per-article judgement for query-driven research (one batched LLM call)."""
+
+    index: int = Field(ge=0, description="Index of the article in the submitted batch.")
+    relevance: float = Field(ge=0.0, le=1.0,
+                             description="How directly the article answers the user's query.")
+    key_finding: str = Field(max_length=280, description="The article's main finding, one sentence.")
+    significance: str = Field(max_length=280,
+                              description="Why it matters (business/financial/technical), one sentence.")
+    impact: ImpactLevel = Field(description="Importance of the development; Low when not applicable.")
+    sentiment: Sentiment = Field(description="Only where meaningful; otherwise Neutral.")
+    reason: str = Field(max_length=280, description="One concise sentence justifying impact.")
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class QueryAnalysisResult(BaseModel):
+    """Structured LLM output: a score for every candidate article submitted."""
+
+    scores: list[QueryArticleScore]
+
+    @field_validator("scores")
+    @classmethod
+    def _non_empty(cls, v: list[QueryArticleScore]) -> list[QueryArticleScore]:
+        if not v:
+            raise ValueError("analysis must score at least one article")
+        return v
+
+
+class QueryFinding(BaseModel):
+    """A ranked finding from query-driven research, with evidence tracking."""
+
+    title: str
+    url: str
+    source: str
+    published_at: datetime | None
+    relevance: float = Field(ge=0.0, le=1.0)
+    key_finding: str = ""
+    significance: str = ""
+    impact: ImpactLevel
+    sentiment: Sentiment
+    reason: str = ""
+    confidence: float = 0.0
+    source_quality: float = 0.0
+    evidence_excerpt: str = ""
+
+
+class QueryReport(BaseModel):
+    """Machine-readable report for a query-driven research run."""
+
+    report_type: Literal["query"] = "query"
+    query: str
+    run_id: str
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime | None = None
+    search_config: dict = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    counts: dict = Field(default_factory=dict)
+    findings: list[QueryFinding] = Field(default_factory=list)
+    config_snapshot: dict = Field(default_factory=dict)

@@ -28,6 +28,8 @@ export interface CompaniesResponse {
 export interface ReportSummary {
   id: string;
   date: string;
+  title: string;
+  report_type: "ftse" | "query";
   generated_at: string | null;
   company_count: number;
   article_count: number;
@@ -62,9 +64,28 @@ export interface ReportCompany {
   articles: ReportArticle[];
 }
 
+export interface QueryFinding {
+  title: string;
+  url: string;
+  source: string;
+  published_at: string | null;
+  relevance: number;
+  key_finding: string;
+  significance: string;
+  impact: Impact;
+  sentiment: Sentiment;
+  reason: string;
+  confidence: number;
+  source_quality: number | null;
+  evidence_excerpt: string;
+}
+
 export interface ReportDetail {
   summary: ReportSummary;
   companies: ReportCompany[];
+  findings: QueryFinding[];
+  query: string | null;
+  metadata: Record<string, unknown>;
   has_markdown: boolean;
 }
 
@@ -91,6 +112,10 @@ export interface CompanyProgress {
 export interface ResearchRun {
   run_id: string;
   status: RunStatus;
+  mode: "companies" | "query";
+  query: string | null;
+  stage: string | null;
+  stats: Record<string, unknown>;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -111,6 +136,10 @@ export interface RunsResponse {
 }
 
 export interface ResearchRunCreate {
+  query?: string;
+  max_results?: number;
+  time_range?: string;
+  fresh_search?: boolean;
   tickers?: string[];
   limit_companies?: number;
   agentic?: boolean;
@@ -133,4 +162,7 @@ export interface ArticleWithCompany extends ReportArticle {
   company: string;
   ticker: string;
   report_id: string;
+  relevance?: number;
+  key_finding?: string;
+  significance?: string;
 }
