@@ -588,6 +588,62 @@ def _coro(value):
     return _inner()
 
 
+def test_synthesis_prompt_labels_evidence_type():
+    """The synthesizer must know whether it is reading a search snippet or a
+    full article, and must be told to avoid Markdown markup in the answer."""
+    analyzer = ResearchAnalyzer(_settings(), run_id="p1")
+    plan = ResearchPlan(task_type=TaskType.GENERAL, intent_summary="x")
+    evidence = [
+        {"title": "Snippet piece", "url": "https://a.example/1",
+         "source": "a.example", "published_at": None,
+         "text": "short snippet", "kind": "search"},
+        {"title": "Full piece", "url": "https://b.example/2",
+         "source": "b.example", "published_at": None,
+         "text": "complete article", "kind": "article"},
+    ]
+    prompt = analyzer._prompt("q", plan, evidence)
+    assert "Type: search snippet" in prompt
+    assert "Type: full article" in prompt
+    # The answer field must steer the model away from raw Markdown.
+    assert "Markdown" in analyzer._llm().system_prompt
+
+
+@pytest.mark.asyncio
+async def test_model_driven_search_notes_become_warnings(monkeypatch):
+    """Provider notes from a model-requested search must surface as warnings,
+    exactly like planned searches do."""
+    agent = ResearchAgent(_settings(), cache=None, run_id="w1")
+    plan = ResearchPlan(task_type=TaskType.GENERAL, intent_summary="x",
+                        tools_allowed=["web_search"], search_queries=[],
+                        max_tool_calls=3)
+    monkeypatch.setattr(QueryPlanner, "plan", lambda self, q: _coro(plan))
+
+    async def search_with_note(self, args):
+        return {"ok": True, "results": [], "providers": [],
+                "notes": ["SearXNG degraded: fallback used"]}
+
+    monkeypatch.setattr(SearchTool, "run", search_with_note)
+
+    steps = [
+        AgentStep(action="call_tool", tool_name="web_search",
+                  arguments={"query": "extra"}),
+        AgentStep(action="finish", reason="done"),
+    ]
+    seq = {"i": 0}
+
+    async def scripted(self, q, p, t, c):
+        step = steps[min(seq["i"], len(steps) - 1)]
+        seq["i"] += 1
+        return step
+
+    monkeypatch.setattr(ResearchAgent, "_next_step", scripted)
+    monkeypatch.setattr(ResearchAnalyzer, "synthesize",
+                        lambda self, q, p, e: _coro(
+                            QueryAnswer.unverified(q, TaskType.GENERAL, ["none"])))
+    result = await agent.research("q")
+    assert "SearXNG degraded: fallback used" in result.warnings
+
+
 # ---------------------------------------------------------------------------
 # ResponseParser
 # ---------------------------------------------------------------------------

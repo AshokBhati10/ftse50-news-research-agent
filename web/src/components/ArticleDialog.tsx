@@ -106,7 +106,7 @@ export default function ArticleDialog({
               <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-terminal-faint">
                 Evidence excerpt
               </h4>
-              <blockquote className="rounded-lg border-l-2 border-indigo-500/60 bg-white/[0.03] px-4 py-3 text-sm leading-relaxed text-terminal-muted">
+              <blockquote className="break-words rounded-lg border-l-2 border-indigo-500/60 bg-white/[0.03] px-4 py-3 text-sm leading-relaxed text-terminal-muted">
                 {article.evidence_excerpt}
               </blockquote>
             </div>

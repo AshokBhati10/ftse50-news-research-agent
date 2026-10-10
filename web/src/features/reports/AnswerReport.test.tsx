@@ -104,8 +104,25 @@ describe("Answer-first report", () => {
     ).toBeTruthy();
   });
 
-  it("shows key points, citations and limitations", async () => {
-    vi.mocked(api.report).mockResolvedValue(answerReport());
+  it("renders a Markdown answer as formatted paragraphs and lists", async () => {
+    const rep = answerReport();
+    rep.answer!.key_points = [];
+    rep.answer!.answer = [
+      "AstraZeneca completed a **$2bn** equity investment in Summit Therapeutics.",
+      "",
+      "1. **5 Oct 2026** — completion reported.",
+      "2. **2 Oct 2026** — collaboration announced.",
+    ].join("\n");
+    vi.mocked(api.report).mockResolvedValue(rep);
+    const { container } = renderPage();
+    await screen.findByText(/AstraZeneca completed a/);
+    // Bold renders as a real element; no literal Markdown markers remain.
+    expect(container.querySelector("strong")?.textContent).toBe("$2bn");
+    expect(container.textContent).not.toContain("**");
+    expect(container.querySelectorAll("ol li")).toHaveLength(2);
+  });
+
+  it("shows key points, citations and limitations", async () => {    vi.mocked(api.report).mockResolvedValue(answerReport());
     renderPage();
     await screen.findByText("Key points");
     expect(

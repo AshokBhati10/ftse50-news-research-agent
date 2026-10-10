@@ -58,16 +58,27 @@ class ResearchAnalyzer:
             self.settings,
             system_prompt=BASE_SYSTEM_PROMPT + """\
 You synthesize research evidence into a direct answer. Output structured data:
-- answer: resolve the user's question directly and concisely. For factual
-  questions give the verified fact FIRST (name, date, number), then brief
-  context. Never output a bare list of search results.
-- key_points: the supporting facts, each traceable to a source.
+- answer: resolve the user's question directly in concise plain prose. Lead with
+  the verified fact first (name, date, number), then at most one or two short
+  sentences of essential context. Do NOT use Markdown formatting markers
+  (**bold**, # headings) and do NOT put a numbered list in this field — the
+  reader sees it as plain text. Keep it to one or two short paragraphs.
+- key_points: the supporting findings, one fact per item, each traceable to a
+  source. Put the detail here as separate short sentences and do not repeat the
+  answer verbatim.
 - sources: only sources you actually used, each with supporting_excerpt and
   supports_claims (indices into key_points the source supports).
 - confidence: 0.0-1.0 reflecting evidence strength.
-- limitations: what could not be verified, conflicts, date caveats.
+- limitations: concise caveats, one per item (missing dates, conflicts,
+  approximate/relative timestamps, incompletely verified claims). Never invent
+  dates or figures the evidence does not provide.
 - verified: false when the evidence is insufficient — then answer must say
   the answer could not be verified.
+
+Evidence type matters: a "search snippet" is a short excerpt — only use it for
+the fact it directly states. A "full article" carries the complete text. When a
+date is relative ("5 days ago"), describe it as approximate; never convert a
+relative timestamp into a specific calendar date.
 """,
             output_type=QueryAnswer,
             run_id=self.run_id,
@@ -77,10 +88,11 @@ You synthesize research evidence into a direct answer. Output structured data:
         blocks = []
         for i, e in enumerate(evidence):
             date = e.get("published_at") or "unknown date"
+            kind = "full article" if e.get("kind") == "article" else "search snippet"
             blocks.append(
                 f"[{i}] {e.get('title', 'untitled')}\n"
                 f"    URL: {e.get('url', '')}\n"
-                f"    Source: {e.get('source', 'unknown')} | Date: {date}\n"
+                f"    Source: {e.get('source', 'unknown')} | Date: {date} | Type: {kind}\n"
                 f"    {e.get('text', '')[:1500]}"
             )
         return (
@@ -289,6 +301,8 @@ class ResearchAgent:
                 continue
             obs = await _call(step.tool_name, step.arguments or {})
             if step.tool_name == "web_search":
+                if obs.get("notes"):
+                    warnings.extend(obs["notes"])
                 _ingest([self._evidence_from_search(r)
                          for r in obs.get("results", [])])
             elif step.tool_name == "fetch_article" and obs.get("ok"):

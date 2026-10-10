@@ -153,6 +153,11 @@ describe("QueryResearchForm", () => {
     await user.click(btn); // second click while in flight
     expect(vi.mocked(api.startRun)).toHaveBeenCalledTimes(1);
     resolveStart({ run_id: "run_dup" } as never);
+    // Let the in-flight promise settle so the finally() state update is
+    // flushed inside act (avoids a React "not wrapped in act" warning).
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Start research/i })).toBeEnabled()
+    );
   });
 
   it("shows a clear message when the API fails", async () => {

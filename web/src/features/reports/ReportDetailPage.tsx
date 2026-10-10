@@ -24,6 +24,7 @@ import {
 } from "../../components/ui";
 import ArticleDialog from "../../components/ArticleDialog";
 import { cn } from "../../lib/cn";
+import { InlineMarkdown, Markdown } from "../../lib/markdown";
 
 type SortKey = "impact" | "confidence" | "company" | "published";
 
@@ -483,21 +484,25 @@ function AnswerSection({ answer }: { answer: QueryAnswer }) {
               {answer.task_type.replaceAll("_", " ")} · {pct}% confidence
             </span>
           </div>
-          <p className="mt-3 text-lg leading-relaxed text-white">{answer.answer}</p>
+          <Markdown
+            text={answer.answer}
+            className="mt-3 text-[15px] text-white [&_p]:text-white"
+          />
         </div>
       </Card>
 
       {answer.key_points.length > 0 && (
         <Card>
           <CardHeader title="Key points" />
-          <ol className="list-decimal space-y-2 px-5 py-4 pl-10 text-sm text-terminal-text">
+          <ol className="list-decimal space-y-2 px-5 py-4 pl-10 text-sm text-terminal-text marker:text-terminal-faint">
             {answer.key_points.map((kp, i) => (
-              <li key={i}>{kp}</li>
+              <li key={i}>
+                <InlineMarkdown text={kp} />
+              </li>
             ))}
           </ol>
         </Card>
       )}
-
       {answer.sources.length > 0 && (
         <Card>
           <CardHeader title={`Sources (${answer.sources.length})`} subtitle="Citations supporting the answer" />
@@ -508,7 +513,7 @@ function AnswerSection({ answer }: { answer: QueryAnswer }) {
                   href={s.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-300 hover:underline"
+                  className="inline-flex items-center gap-1.5 break-words text-sm font-medium text-indigo-300 hover:underline"
                 >
                   <ExternalLink className="h-3.5 w-3.5" />
                   {s.title || s.url}
@@ -533,7 +538,9 @@ function AnswerSection({ answer }: { answer: QueryAnswer }) {
           <CardHeader title="Limitations" />
           <ul className="list-disc space-y-1 px-5 py-4 pl-10 text-sm text-terminal-muted">
             {answer.limitations.map((l, i) => (
-              <li key={i}>{l}</li>
+              <li key={i}>
+                <InlineMarkdown text={l} />
+              </li>
             ))}
           </ul>
         </Card>

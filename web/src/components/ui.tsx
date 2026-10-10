@@ -302,8 +302,7 @@ export function Alert({
     <div
       className={cn(
         "flex items-start gap-2.5 rounded-lg border px-3.5 py-3 text-sm",
-        badgeTones[tone],
-        "bg-opacity-40"
+        badgeTones[tone]
       )}
       role="alert"
     >
