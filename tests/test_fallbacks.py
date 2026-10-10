@@ -143,3 +143,30 @@ async def test_live_company_failure_recorded_and_continues(monkeypatch):
     assert report.ticker == "AZN.L"
     assert report.articles == []
     assert "LLM down" in report.notes
+
+
+def test_fallback_extract_ignores_navigation_and_advertisements():
+    html = """
+    <html><body>
+      <nav><p>Unrelated navigation content that should never appear.</p></nav>
+      <div class="advertisement">
+        <p>Buy this stock now for massive gains. Advertisement content.</p>
+      </div>
+      <article>
+        <p>AstraZeneca announced new clinical trial results today. %s</p>
+        <p>The company reported additional details about the study. %s</p>
+      </article>
+    </body></html>
+    """ % (
+        "The clinical trial data showed meaningful progress. " * 10,
+        "Management will discuss the results with investors. " * 10,
+    )
+
+    text = crawl_mod.fallback_extract(
+        "https://example.com/article", html, min_chars=100
+    )
+
+    assert text is not None
+    assert "AstraZeneca announced new clinical trial results" in text
+    assert "Unrelated navigation content" not in text
+    assert "Buy this stock now" not in text

@@ -165,5 +165,7 @@ async def test_analyze_company_gives_up_after_bounded_retries(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_analyze_company_requires_llm_config():
+    settings = Settings(ollama_api_key="")
+
     with pytest.raises(RuntimeError, match="OLLAMA_API_KEY"):
-        await analyze_company(_company(), _articles(), Settings(), cache=None)
+        await analyze_company(_company(), _articles(), settings, cache=None)
