@@ -103,10 +103,31 @@ class QueryFindingOut(BaseModel):
     evidence_excerpt: str = ""
 
 
+class SourceRecordOut(BaseModel):
+    title: str
+    url: str
+    source_name: str = ""
+    published_at: datetime | None = None
+    supporting_excerpt: str = ""
+    supports_claims: list[int] = Field(default_factory=list)
+
+
+class QueryAnswerOut(BaseModel):
+    query: str
+    task_type: str
+    answer: str
+    key_points: list[str] = Field(default_factory=list)
+    sources: list[SourceRecordOut] = Field(default_factory=list)
+    confidence: float = 0.0
+    limitations: list[str] = Field(default_factory=list)
+    verified: bool = True
+
+
 class ReportDetail(BaseModel):
     summary: ReportSummary
     companies: list[ReportCompany] = Field(default_factory=list)  # legacy FTSE
     findings: list[QueryFindingOut] = Field(default_factory=list)  # query mode
+    answer: QueryAnswerOut | None = None  # agentic answer-first (query mode)
     query: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     has_markdown: bool = False
@@ -159,7 +180,13 @@ class ResearchRunCreate(BaseModel):
         max_length=60,
     )
     limit_companies: int | None = Field(default=None, ge=1, le=60)
-    agentic: bool = False
+    agentic: bool | None = Field(
+        default=None,
+        description="Query runs: use the agentic research loop (task planning + "
+                    "bounded tool calling + direct answer). Defaults to True for "
+                    "query runs. Company runs: let the Pydantic AI agent drive "
+                    "per-company research (defaults to False).",
+    )
     no_cache: bool = False
 
     @field_validator("query")
@@ -176,10 +203,13 @@ class ResearchRunCreate(BaseModel):
     def _mutually_exclusive(self) -> "ResearchRunCreate":
         if self.query and self.tickers:
             raise ValueError("Provide either 'query' or 'tickers', not both.")
-        if self.query and self.agentic:
-            raise ValueError("Agentic mode is only supported for FTSE company "
-                             "research, not for query-driven runs.")
         return self
+
+    def resolved_agentic(self) -> bool:
+        """Agentic loop defaults ON for query runs, OFF for company runs."""
+        if self.agentic is not None:
+            return self.agentic
+        return self.query is not None
 
 
 class CompanyProgress(BaseModel):

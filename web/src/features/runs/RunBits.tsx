@@ -114,13 +114,22 @@ export function useRunLive(runId: string | undefined) {
 }
 
 export const QUERY_STAGE_LABELS: Record<string, string> = {
+  // Agentic research loop (default for query runs).
+  plan: "Planning the research",
+  tool: "Gathering evidence",
+  synthesize: "Synthesizing the answer",
+  validate: "Validating sources",
+  report: "Writing report",
+  // Legacy simple pipeline (query runs with agentic: false).
   search: "Searching the web",
   extract: "Extracting articles",
   deduplicate: "Deduplicating",
   analyze: "Analysing with LLM",
-  report: "Writing report",
   done: "Done",
 };
+
+const AGENT_STAGE_ORDER = ["plan", "tool", "synthesize", "validate", "report"];
+const SIMPLE_STAGE_SET = new Set(["search", "extract", "deduplicate", "analyze"]);
 
 export function RunProgressCard({ run }: { run: ResearchRun }) {
   if (run.mode === "query") return <QueryRunProgressCard run={run} />;
@@ -261,8 +270,18 @@ export function QueryRunProgressCard({ run }: { run: ResearchRun }) {
     extracted: num(stats["extract"], "extracted"),
     candidates: num(stats["deduplicate"], "candidates"),
     findings: num(stats["analyze"], "findings"),
+    toolCalls: num(stats["tool"], "call"),
+    evidence: num(stats["synthesize"], "evidence_items"),
   };
-  const currentIdx = run.stage ? QUERY_STAGE_ORDER.indexOf(run.stage) : -1;
+  // The agentic loop (default) streams plan/tool/synthesize/validate/report;
+  // the legacy simple pipeline streams search/extract/deduplicate/analyze/report.
+  // A run is "simple" when explicitly requested, or when its current stage
+  // belongs to the legacy set (older runs).
+  const stage = run.stage ?? "";
+  const simple =
+    run.request?.agentic === false || SIMPLE_STAGE_SET.has(stage);
+  const order = simple ? QUERY_STAGE_ORDER : AGENT_STAGE_ORDER;
+  const currentIdx = stage ? order.indexOf(stage) : -1;
 
   return (
     <Card>
@@ -274,7 +293,7 @@ export function QueryRunProgressCard({ run }: { run: ResearchRun }) {
       <div className="space-y-4 px-5 py-4">
         {/* Honest stage tracker — no invented percentages */}
         <ol className="space-y-2">
-          {QUERY_STAGE_ORDER.map((s, i) => {
+          {order.map((s, i) => {
             const done = currentIdx > i || run.stage === "done";
             const current = run.stage === s && active;
             return (
@@ -294,6 +313,12 @@ export function QueryRunProgressCard({ run }: { run: ResearchRun }) {
                 <span className={cn(done || current ? "text-white" : "text-terminal-faint")}>
                   {QUERY_STAGE_LABELS[s]}
                 </span>
+                {s === "tool" && counts.toolCalls > 0 && (
+                  <span className="text-xs text-terminal-faint">{counts.toolCalls} tool calls</span>
+                )}
+                {s === "synthesize" && counts.evidence > 0 && (
+                  <span className="text-xs text-terminal-faint">{counts.evidence} evidence items</span>
+                )}
                 {s === "search" && counts.collected > 0 && (
                   <span className="text-xs text-terminal-faint">{counts.collected} collected</span>
                 )}

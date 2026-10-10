@@ -62,6 +62,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Recency bias for --query search (default: month).")
     p.add_argument("--fresh", action="store_true",
                    help="With --query: bypass cached search results.")
+    p.add_argument("--no-agent", action="store_true",
+                   help="With --query: use the simple deterministic pipeline "
+                        "instead of the agentic research loop.")
     p.add_argument("--no-cache", action="store_true", help="Disable all caching.")
     p.add_argument("--output-dir", type=str, default="",
                    help="Override output directory for reports.")
@@ -142,9 +145,11 @@ async def _run_query(args: argparse.Namespace, settings: Settings,
     report = await execute_query_research(
         query, settings, cache, run_id=run_id,
         max_results=args.max_results, time_range=args.time_range,
-        fresh=args.fresh, on_stage=_on_stage,
+        fresh=args.fresh, agentic=not args.no_agent, on_stage=_on_stage,
     )
     json_path, md_path = write_query_reports(report, settings.output_dir)
+    if report.answer:
+        log.info("Answer: %s", report.answer.answer[:300])
     log.info("Done: %d findings for %r.", len(report.findings), query)
     log.info("Wrote %s and %s", json_path, md_path)
     for w in report.warnings:
@@ -169,9 +174,6 @@ async def amain(args: argparse.Namespace) -> int:
         log.error("--query must not be blank.")
         return 2
     if args.query.strip():
-        if args.agentic:
-            log.error("--agentic is only supported for FTSE company research, not --query.")
-            return 2
         if not 1 <= args.max_results <= 50:
             log.error("--max-results must be between 1 and 50.")
             return 2

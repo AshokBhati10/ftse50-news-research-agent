@@ -171,16 +171,111 @@ async def execute_query_research(
     max_results: int = 20,
     time_range: str = "month",
     fresh: bool = False,
+    agentic: bool = True,
     on_stage: Callable[[str, dict], None] | None = None,
 ) -> QueryReport:
-    """Run the full query-driven pipeline: search -> extract -> dedup -> analyze.
+    """Run the query-driven pipeline.
 
-    ``on_stage`` receives ``(stage_name, info)`` as each stage completes, so
-    the API can stream honest progress (stage names in ``QUERY_STAGES``).
-    Per-stage failures degrade gracefully: search/crawl problems yield fewer
-    (or zero) findings with warnings, never a crash. ``CancelledError``
-    propagates for cooperative cancellation.
+    ``agentic=True`` (default) uses the ResearchAgent: task-specific planning,
+    a bounded tool-calling loop, and an answer-first report. ``agentic=False``
+    keeps the original deterministic pipeline (search -> extract -> dedup ->
+    one batched analysis -> ranked findings).
     """
+    if agentic:
+        return await _execute_agentic_query(
+            query, settings, cache, run_id=run_id, max_results=max_results,
+            time_range=time_range, fresh=fresh, on_stage=on_stage,
+        )
+    return await _execute_simple_query(
+        query, settings, cache, run_id=run_id, max_results=max_results,
+        time_range=time_range, fresh=fresh, on_stage=on_stage,
+    )
+
+
+async def _execute_agentic_query(
+    query: str,
+    settings: Settings,
+    cache: CacheManager,
+    *,
+    run_id: str,
+    max_results: int,
+    time_range: str,
+    fresh: bool,
+    on_stage: Callable[[str, dict], None] | None,
+) -> QueryReport:
+    """Agentic query research via ResearchAgent (plan -> tools -> answer)."""
+    from datetime import datetime, timezone
+    from agent.research_agent import ResearchAgent
+    from nodes.output import build_answer_report
+
+    started_at = datetime.now(timezone.utc)
+    agent = ResearchAgent(settings, cache, run_id=run_id or "-")
+    result = await agent.research(
+        query, max_results=max_results, time_range=time_range,
+        fresh=fresh, on_stage=on_stage,
+    )
+    # Detailed mode: also produce ranked findings from the gathered evidence.
+    if result.plan.detailed and result.evidence:
+        result.findings = await _findings_from_evidence(
+            query, result.evidence, settings, cache, max_results)
+    return build_answer_report(
+        query=query, run_id=run_id, started_at=started_at,
+        result=result, settings=settings,
+    )
+
+
+async def _findings_from_evidence(query: str, evidence: list[dict],
+                                  settings: Settings, cache: CacheManager,
+                                  max_results: int) -> list:
+    """Ranked findings for detailed mode, from agent-gathered evidence."""
+    from dateutil import parser as date_parser
+    from nodes.analysis import analyze_query
+    from utils.models import Article
+
+    articles: list[Article] = []
+    seen: set[str] = set()
+    for e in evidence:
+        url = e.get("url", "")
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        published = None
+        if e.get("published_at"):
+            try:
+                published = date_parser.parse(str(e["published_at"]))
+            except (ValueError, OverflowError):
+                published = None
+        text = e.get("text", "")
+        articles.append(Article(
+            company="", ticker="", title=e.get("title", "") or url,
+            url=url, source=e.get("source", ""),
+            published_at=published, snippet=text[:500],
+            content=text if e.get("kind") == "article" else None,
+            search_provider="agent",
+            extraction_status="ok" if text else "snippet_only",
+            source_quality=float(e.get("source_quality", 0.0) or 0.0),
+        ))
+    if not articles:
+        return []
+    try:
+        return await analyze_query(query, articles[:max_results], settings, cache)
+    except Exception as exc:  # noqa: BLE001 — findings are optional
+        log.warning("Detailed findings failed: %s", exc)
+        return []
+
+
+async def _execute_simple_query(
+    query: str,
+    settings: Settings,
+    cache: CacheManager,
+    *,
+    run_id: str,
+    max_results: int,
+    time_range: str,
+    fresh: bool,
+    on_stage: Callable[[str, dict], None] | None,
+) -> QueryReport:
+    """Original deterministic query pipeline (no agent loop)."""
     from datetime import datetime, timezone
     from nodes.analysis import AnalysisError, analyze_query
     from nodes.crawl import extract_articles

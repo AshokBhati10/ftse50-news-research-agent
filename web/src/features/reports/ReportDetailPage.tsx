@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, ArrowUpDown, Download, ExternalLink, FileText, Search } from "lucide-react";
 import { api, ApiError } from "../../lib/api";
-import type { ArticleWithCompany, ReportDetail } from "../../types";
+import type { ArticleWithCompany, QueryAnswer, ReportDetail } from "../../types";
 import { formatConfidence, formatDate, hostOf } from "../../lib/format";
 import {
   Alert,
@@ -235,10 +235,12 @@ function QueryReportView({ report }: { report: ReportDetail }) {
     search_config?: Record<string, unknown>;
     warnings?: string[];
     counts?: Record<string, unknown>;
+    plan_summary?: Record<string, unknown>;
   };
   const cfg = (meta.search_config ?? {}) as Record<string, unknown>;
   const counts = (meta.counts ?? {}) as Record<string, unknown>;
   const warnings = (meta.warnings ?? []) as string[];
+  const planSummary = (meta.plan_summary ?? null) as Record<string, unknown> | null;
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -292,6 +294,10 @@ function QueryReportView({ report }: { report: ReportDetail }) {
         <p className="mt-1 font-mono text-xs text-terminal-faint">{report.summary.id}</p>
       </div>
 
+      {report.answer && (
+        <AnswerSection answer={report.answer} />
+      )}
+
       {warnings.length > 0 && (
         <Alert>
           <ul className="list-disc space-y-1 pl-4">
@@ -306,22 +312,61 @@ function QueryReportView({ report }: { report: ReportDetail }) {
         <CardHeader title="Research metadata" />
         <dl className="grid gap-3 px-5 py-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
           <Meta label="Run ID" value={String(meta.run_id ?? "—")} mono />
-          <Meta label="Time range" value={String(cfg.time_range ?? "—")} />
-          <Meta
-            label="Search freshness"
-            value={cfg.fresh_search ? "Fresh search" : cfg.from_cache ? "From cache" : "—"}
-          />
-          <Meta
-            label="Providers"
-            value={(cfg.providers_used as string[])?.join(", ") || "—"}
-          />
-          <Meta label="Collected" value={String(counts.collected ?? "—")} />
-          <Meta label="Extracted" value={String(counts.extracted ?? "—")} />
-          <Meta label="Duplicates removed" value={String(counts.duplicates_removed ?? "—")} />
-          <Meta label="Analysed" value={String(counts.analyzed ?? "—")} />
+          {cfg.task_type ? (
+            <>
+              <Meta label="Task type" value={String(cfg.task_type).replaceAll("_", " ")} />
+              <Meta label="Tool calls" value={String(counts.tool_calls ?? "—")} />
+              <Meta label="Evidence items" value={String(counts.evidence_items ?? "—")} />
+              <Meta label="Sources cited" value={String(counts.sources_cited ?? "—")} />
+            </>
+          ) : (
+            <>
+              <Meta label="Time range" value={String(cfg.time_range ?? "—")} />
+              <Meta
+                label="Search freshness"
+                value={cfg.fresh_search ? "Fresh search" : cfg.from_cache ? "From cache" : "—"}
+              />
+              <Meta
+                label="Providers"
+                value={(cfg.providers_used as string[])?.join(", ") || "—"}
+              />
+              <Meta label="Collected" value={String(counts.collected ?? "—")} />
+              <Meta label="Extracted" value={String(counts.extracted ?? "—")} />
+              <Meta label="Duplicates removed" value={String(counts.duplicates_removed ?? "—")} />
+              <Meta label="Analysed" value={String(counts.analyzed ?? "—")} />
+            </>
+          )}
         </dl>
       </Card>
 
+      {planSummary && (
+        <details className="rounded-xl border border-terminal-border bg-terminal-surface">
+          <summary className="cursor-pointer px-5 py-4 text-sm font-medium text-terminal-muted hover:text-white">
+            Research details — plan, tool trace and search metadata
+          </summary>
+          <div className="space-y-3 border-t border-terminal-border px-5 py-4 text-sm text-terminal-muted">
+            {Boolean(planSummary.intent_summary) && (
+              <p><span className="text-white">Plan:</span> {String(planSummary.intent_summary)}</p>
+            )}
+            {Array.isArray(planSummary.tool_trace) && planSummary.tool_trace.length > 0 && (
+              <div>
+                <p className="mb-1 text-white">Tool trace</p>
+                <ul className="list-disc space-y-1 pl-4 font-mono text-xs">
+                  {(planSummary.tool_trace as { tool: string; arguments_summary: string; observation_summary: string; ok: boolean }[]).map((t, i) => (
+                    <li key={i}>
+                      <span className={t.ok ? "text-green-300" : "text-red-300"}>{t.tool}</span>
+                      <span className="text-terminal-faint"> {t.arguments_summary}</span>
+                      {" → "}{t.observation_summary}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+
+      {report.findings.length > 0 && (
       <Card>
         <CardHeader
           title={`Ranked findings (${visible.length})`}
@@ -405,6 +450,7 @@ function QueryReportView({ report }: { report: ReportDetail }) {
           </ol>
         )}
       </Card>
+      )}
 
       <ArticleDialog article={selected} onClose={() => setSelected(null)} />
     </div>
@@ -416,6 +462,82 @@ function Meta({ label, value, mono }: { label: string; value: string; mono?: boo
     <div>
       <dt className="text-[11px] uppercase tracking-wide text-terminal-faint">{label}</dt>
       <dd className={cn("mt-0.5 text-terminal-text", mono && "font-mono text-xs")}>{value}</dd>
+    </div>
+  );
+}
+
+function AnswerSection({ answer }: { answer: QueryAnswer }) {
+  const pct = Math.round(answer.confidence * 100);
+  return (
+    <div className="space-y-4">
+      <Card className="border-indigo-500/30">
+        <div className="px-5 py-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-indigo-300">
+              Answer
+            </span>
+            <Badge tone={answer.verified ? "up" : "down"}>
+              {answer.verified ? "verified" : "unverified"}
+            </Badge>
+            <span className="ml-auto text-xs text-terminal-faint">
+              {answer.task_type.replaceAll("_", " ")} · {pct}% confidence
+            </span>
+          </div>
+          <p className="mt-3 text-lg leading-relaxed text-white">{answer.answer}</p>
+        </div>
+      </Card>
+
+      {answer.key_points.length > 0 && (
+        <Card>
+          <CardHeader title="Key points" />
+          <ol className="list-decimal space-y-2 px-5 py-4 pl-10 text-sm text-terminal-text">
+            {answer.key_points.map((kp, i) => (
+              <li key={i}>{kp}</li>
+            ))}
+          </ol>
+        </Card>
+      )}
+
+      {answer.sources.length > 0 && (
+        <Card>
+          <CardHeader title={`Sources (${answer.sources.length})`} subtitle="Citations supporting the answer" />
+          <ul className="divide-y divide-terminal-border">
+            {answer.sources.map((s, i) => (
+              <li key={i} className="px-5 py-3">
+                <a
+                  href={s.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-300 hover:underline"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  {s.title || s.url}
+                </a>
+                <p className="mt-0.5 text-xs text-terminal-faint">
+                  {s.source_name || hostOf(s.url)}
+                  {s.published_at ? ` · ${formatDate(s.published_at)}` : ""}
+                </p>
+                {s.supporting_excerpt && (
+                  <p className="mt-1 text-xs italic text-terminal-muted">
+                    “{s.supporting_excerpt}”
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {(answer.limitations.length > 0 || !answer.verified) && (
+        <Card>
+          <CardHeader title="Limitations" />
+          <ul className="list-disc space-y-1 px-5 py-4 pl-10 text-sm text-terminal-muted">
+            {answer.limitations.map((l, i) => (
+              <li key={i}>{l}</li>
+            ))}
+          </ul>
+        </Card>
+      )}
     </div>
   );
 }

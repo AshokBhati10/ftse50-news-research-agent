@@ -123,6 +123,139 @@ NewsAnalysis = AnalysisResult
 
 
 # ---------------------------------------------------------------------------
+# Agentic query research: plans, tool calls, answers
+# ---------------------------------------------------------------------------
+
+class TaskType(str, Enum):
+    FACTUAL_LOOKUP = "factual_lookup"    # who/what/when — one verified answer
+    NEWS_RESEARCH = "news_research"      # recent developments, why did X happen
+    COMPARISON = "comparison"            # compare A vs B on explicit criteria
+    SUMMARIZATION = "summarization"      # summarize a specific article/URL
+    GENERAL = "general"                  # anything else
+
+
+PERMITTED_TOOLS = ("web_search", "fetch_article")
+
+
+class ResearchPlan(BaseModel):
+    """Task-specific plan produced by the planner (LLM or heuristic fallback)."""
+
+    task_type: TaskType
+    intent_summary: str = Field(max_length=280)
+    needs_web_research: bool = True
+    tools_allowed: list[str] = Field(default_factory=lambda: ["web_search", "fetch_article"])
+    search_queries: list[str] = Field(default_factory=list)
+    evidence_needed: str = Field(default="", max_length=500)
+    expected_answer_format: str = Field(default="", max_length=280)
+    completion_criteria: str = Field(default="", max_length=500)
+    detailed: bool = False  # True -> also produce ranked findings
+    max_tool_calls: int = Field(default=5, ge=1, le=10)
+
+    @field_validator("tools_allowed")
+    @classmethod
+    def _only_permitted(cls, v: list[str]) -> list[str]:
+        bad = [t for t in v if t not in PERMITTED_TOOLS]
+        if bad:
+            raise ValueError(f"Unsupported tools in plan: {bad}")
+        return v
+
+    @field_validator("search_queries")
+    @classmethod
+    def _bounded_queries(cls, v: list[str]) -> list[str]:
+        if len(v) > 5:
+            raise ValueError("Plan must not request more than 5 search queries")
+        return [q.strip() for q in v if q.strip()]
+
+
+class AgentStep(BaseModel):
+    """One decision in the controlled tool-calling loop."""
+
+    action: Literal["call_tool", "finish"]
+    tool_name: str = ""
+    arguments: dict = Field(default_factory=dict)
+    reason: str = Field(default="", max_length=280)
+
+    @field_validator("tool_name")
+    @classmethod
+    def _known_tool(cls, v: str, info) -> str:
+        action = (info.data or {}).get("action")
+        if action == "call_tool" and v not in PERMITTED_TOOLS:
+            raise ValueError(f"Unknown tool: {v!r}")
+        return v
+
+
+class SourceRecord(BaseModel):
+    """A citation supporting the answer's claims."""
+
+    title: str
+    url: str
+    source_name: str = ""
+    published_at: datetime | None = None
+    retrieved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    supporting_excerpt: str = Field(default="", max_length=600)
+    supports_claims: list[int] = Field(default_factory=list)
+
+    @field_validator("url")
+    @classmethod
+    def _url_must_be_http(cls, v: str) -> str:
+        v = v.strip()
+        if not v.lower().startswith(("http://", "https://")):
+            raise ValueError(f"source url must be absolute http(s): {v!r}")
+        return v
+
+    @field_validator("supports_claims")
+    @classmethod
+    def _non_negative(cls, v: list[int]) -> list[int]:
+        if any(i < 0 for i in v):
+            raise ValueError("supports_claims indices must be >= 0")
+        return v
+
+
+class ToolTraceEntry(BaseModel):
+    tool: str
+    arguments_summary: str = ""
+    observation_summary: str = ""
+    ok: bool = True
+
+
+class QueryAnswer(BaseModel):
+    """The direct, evidence-backed answer to the user's question."""
+
+    query: str
+    task_type: TaskType = TaskType.GENERAL
+    answer: str = Field(min_length=1, description="Direct answer, not a result list.")
+    key_points: list[str] = Field(default_factory=list)
+    sources: list[SourceRecord] = Field(default_factory=list)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    limitations: list[str] = Field(default_factory=list)
+    tool_trace: list[ToolTraceEntry] = Field(default_factory=list)
+    verified: bool = True
+
+    @field_validator("answer")
+    @classmethod
+    def _answer_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("answer must not be blank")
+        return v.strip()
+
+    @classmethod
+    def unverified(cls, query: str, task_type: TaskType,
+                   limitations: list[str]) -> "QueryAnswer":
+        """Honest fallback when the evidence cannot support an answer."""
+        return cls(
+            query=query,
+            task_type=task_type,
+            answer=("I could not verify an answer to this question from the "
+                    "sources retrieved."),
+            key_points=[],
+            sources=[],
+            confidence=0.0,
+            limitations=limitations or ["Insufficient evidence retrieved."],
+            verified=False,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Query-driven research models
 # ---------------------------------------------------------------------------
 
@@ -185,3 +318,6 @@ class QueryReport(BaseModel):
     counts: dict = Field(default_factory=dict)
     findings: list[QueryFinding] = Field(default_factory=list)
     config_snapshot: dict = Field(default_factory=dict)
+    # Agentic answer-first fields (populated by ResearchAgent runs).
+    answer: QueryAnswer | None = None
+    plan_summary: dict = Field(default_factory=dict)

@@ -228,9 +228,9 @@ class RunManager:
                     "max_results": req.max_results or 20,
                     "time_range": req.time_range or "month",
                     "fresh_search": req.fresh_search,
+                    "agentic": req.resolved_agentic(),
                     "tickers": tickers,
                     "limit_companies": req.limit_companies,
-                    "agentic": req.agentic,
                     "no_cache": req.no_cache,
                 },
             )
@@ -333,6 +333,9 @@ class RunManager:
             state.stats = {**state.stats, stage: info}
             if stage == "analyze":
                 state.articles_found = info.get("findings", 0)
+            elif stage == "report" and state.mode == "query":
+                # Agentic runs report sources cited instead of findings.
+                state.articles_found = info.get("sources", info.get("findings", 0))
             self._persist(state)
             self._emit(state, {"type": "stage", "stage": stage,
                                "run": state.to_out().model_dump(mode="json")})
@@ -345,6 +348,7 @@ class RunManager:
             max_results=int(req.get("max_results") or 20),
             time_range=req.get("time_range") or "month",
             fresh=bool(req.get("fresh_search")),
+            agentic=bool(req.get("agentic", True)),
             on_stage=_on_stage,
         )
 

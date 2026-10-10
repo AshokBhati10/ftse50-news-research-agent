@@ -14,11 +14,13 @@ from datetime import datetime
 from pathlib import Path
 
 from api.schemas import (
+    QueryAnswerOut,
     QueryFindingOut,
     ReportArticle,
     ReportCompany,
     ReportDetail,
     ReportSummary,
+    SourceRecordOut,
 )
 
 log = logging.getLogger(__name__)
@@ -89,6 +91,37 @@ def _summarize(path: Path) -> ReportSummary:
     )
 
 
+def _parse_answer(data: dict | None) -> QueryAnswerOut | None:
+    """Parse the answer-first block; None when absent or malformed."""
+    if not isinstance(data, dict) or not str(data.get("answer", "")).strip():
+        return None
+    try:
+        sources = [
+            SourceRecordOut(
+                title=s.get("title", ""),
+                url=s.get("url", ""),
+                source_name=s.get("source_name", "") or "",
+                published_at=_parse_dt(s.get("published_at")),
+                supporting_excerpt=s.get("supporting_excerpt", "") or "",
+                supports_claims=[int(i) for i in s.get("supports_claims", [])],
+            )
+            for s in data.get("sources", [])
+            if isinstance(s, dict) and str(s.get("url", "")).startswith(("http://", "https://"))
+        ]
+        return QueryAnswerOut(
+            query=str(data.get("query", "")),
+            task_type=str(data.get("task_type", "general")),
+            answer=str(data["answer"]).strip(),
+            key_points=[str(k) for k in data.get("key_points", [])],
+            sources=sources,
+            confidence=float(data.get("confidence", 0.0) or 0.0),
+            limitations=[str(l) for l in data.get("limitations", [])],
+            verified=bool(data.get("verified", True)),
+        )
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
 def get_report_detail(report_id: str, settings) -> ReportDetail:
     validate_report_id(report_id)
     path = _output_dir(settings) / f"{report_id}.json"
@@ -121,6 +154,7 @@ def get_report_detail(report_id: str, settings) -> ReportDetail:
         return ReportDetail(
             summary=summary,
             findings=findings,
+            answer=_parse_answer(data.get("answer")),
             query=data.get("query"),
             metadata={
                 "run_id": data.get("run_id"),
@@ -128,6 +162,7 @@ def get_report_detail(report_id: str, settings) -> ReportDetail:
                 "search_config": data.get("search_config", {}),
                 "warnings": data.get("warnings", []),
                 "counts": data.get("counts", {}),
+                "plan_summary": data.get("plan_summary", {}),
             },
             has_markdown=has_markdown,
         )

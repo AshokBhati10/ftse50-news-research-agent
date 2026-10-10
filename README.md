@@ -88,6 +88,98 @@ an opt-in fully agentic per-company mode (`--agentic`).
 
 ---
 
+## Query-driven research agent
+
+Query runs (`--query`, or the UI's research box) use a class-based agent core
+in `agent/` instead of a fixed pipeline. The agent **answers the user's actual
+question first** — search results are evidence, never the answer.
+
+```mermaid
+flowchart TD
+    Q[User query] --> RA[ResearchAgent\norchestrates the run]
+    RA --> QP[QueryPlanner\ntask-specific plan]
+    QP -->|LLM plan| P[ResearchPlan\ntask type, tools, queries,\nevidence needs, completion criteria]
+    QP -->|LLM unavailable| HP[heuristic fallback plan]
+    P --> TL[Tool loop — max 5 calls]
+    HP --> TL
+    TL --> TE[ToolExecutor\nvalidates name + args]
+    TE --> ST[SearchTool\nSearXNG → You.com fallback]
+    TE --> AE[ArticleExtractor\nCrawl4AI extraction]
+    ST --> OBS[observations]
+    AE --> OBS
+    OBS -->|insufficient?| TL
+    OBS -->|sufficient / budget spent| AN[ResearchAnalyzer\nsynthesizes direct answer]
+    AN --> RP[ResponseParser\nvalidates schema,\ndrops fabricated sources]
+    RP --> RG[ReportGenerator\nanswer-first JSON + Markdown]
+    RG --> UI[Answer → key points → sources\n→ limitations → research details]
+```
+
+### Class responsibilities
+
+| Class | File | Responsibility |
+|---|---|---|
+| `ResearchAgent` | `agent/research_agent.py` | Coordinates the lifecycle: plan → bounded tool loop → synthesize → validate → report; emits honest stage events |
+| `QueryPlanner` | `agent/planner.py` | Interprets the query and generates a validated task-specific `ResearchPlan`; deterministic heuristic fallback when the LLM is down |
+| `ToolRegistry` | `agent/tools.py` | The fixed set of permitted tools (`web_search`, `fetch_article`) with Pydantic arg schemas |
+| `ToolExecutor` | `agent/tools.py` | Validates tool name/arguments, executes, suppresses duplicate calls; the model never touches the network |
+| `SearchTool` | `agent/tools.py` | SearXNG primary, You.com fallback; drops unusable results, deprioritizes homepages, ranks by source quality + query-term overlap; per-query result cache |
+| `ArticleExtractor` | `agent/tools.py` | Fetches and extracts one article URL via the existing Crawl4AI pipeline |
+| `LLMClient` | `agent/llm_client.py` | Centralizes model calls: timeouts, bounded retries with exponential backoff, auth errors never retried, structured-output validation, run-scoped logging, no secrets in logs |
+| `ResearchAnalyzer` | `agent/research_agent.py` | Synthesizes retrieved evidence into a direct, cited `QueryAnswer` |
+| `ResponseParser` | `agent/research_agent.py` | Validates the answer: non-empty, sources ⊆ retrieved evidence (fabricated citations dropped), claim indices in range, confidence honest |
+| `ReportGenerator` | `nodes/output.py` | `build_answer_report` / `render_answer_markdown`: Answer → key points → sources → confidence & limitations → research details (plan + tool trace) |
+
+### Dynamic planning and tool calling
+
+1. `QueryPlanner` classifies the intent (`factual_lookup`, `news_research`,
+   `comparison`, `summarization`, `general`) and asks the LLM for a
+   task-specific plan: which tools are allowed, which search queries to run,
+   what evidence is needed, the expected answer format, and completion
+   criteria. The plan is validated against the permitted tool set and the
+   configurable call budget (`max_tool_calls`, default 5).
+2. The agent executes planned searches/fetches, then lets the model request
+   follow-up tool calls (`AgentStep`: `call_tool` or `finish`) until the
+   evidence is sufficient or the budget is spent. Duplicate calls are skipped;
+   disallowed tools stop the loop with a warning.
+3. `ResearchAnalyzer` synthesizes the direct answer with inline citations;
+   `ResponseParser` enforces schema and evidence integrity.
+
+### Direct-answer and citation behaviour
+
+- Every query report begins with an **Answer** section that resolves the
+  question directly ("Georges Elhedery is the Group Chief Executive of HSBC
+  Holdings plc." — not ten links).
+- Sources appear beside the claims they support (`supports_claims` indices)
+  and in a concise Sources section — only used sources, never the whole
+  crawl set.
+- For causal questions the agent distinguishes reported facts from
+  speculation and never claims causation from date coincidence.
+- If evidence is insufficient or conflicting, the report says the answer
+  could not be verified (`verified: false`, confidence 0) instead of
+  inventing one.
+- Queries explicitly asking for detailed/ranked/comprehensive research
+  (`plan.detailed`) additionally get ranked findings from the gathered
+  evidence — still after the executive answer.
+
+### Configuration
+
+| Setting | Env | Default | Meaning |
+|---|---|---|---|
+| `max_tool_calls` | `MAX_TOOL_CALLS` | 5 | Hard bound on tool calls per query run |
+| `llm_timeout_s` | `LLM_TIMEOUT_S` | 90 | Per-call model timeout |
+| `llm_max_retries` | — | 3 | Bounded retries (auth failures never retried) |
+
+API: `POST /api/research-runs` accepts `{"query": "...", "max_results": 20,
+"time_range": "month"|"week"|"day"|"year", "fresh_search": true, "agentic": true}`.
+`agentic` defaults to **true** for query runs (the research loop above);
+pass `"agentic": false` for the legacy deterministic pipeline. For FTSE
+company runs `agentic` keeps its original meaning (default false).
+
+CLI: `--query "..." [--max-results N] [--time-range week] [--fresh] [--no-agent]`
+(`--no-agent` selects the legacy deterministic query pipeline).
+
+---
+
 ## Prerequisites
 
 - Python 3.10+ and [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
@@ -301,6 +393,11 @@ ftse50-news-agent/
 │       └── lib/           # typed API client, formatters
 ├── config/settings.py      # validated, centralised configuration
 ├── agent/agent.py          # Pydantic AI agent + tools (pipeline & agentic modes)
+├── agent/                  # query-driven research agent core
+│   ├── research_agent.py   # ResearchAgent, ResearchAnalyzer, ResponseParser
+│   ├── planner.py          # QueryPlanner + task classifier + fallback plans
+│   ├── tools.py            # ToolRegistry, ToolExecutor, SearchTool, ArticleExtractor
+│   └── llm_client.py       # LLMClient: timeouts, bounded retries, no secret leaks
 ├── nodes/
 │   ├── ingestion.py        # FTSE 100 -> market caps -> top 50
 │   ├── search.py           # SearXNG -> refined -> You.com + yfinance
@@ -327,8 +424,14 @@ ftse50-news-agent/
 - Article extraction needs Playwright browsers for Crawl4AI; without them the
   lightweight fallback is used (lower fidelity on JS-heavy pages).
 - The paid Ollama key is billed per token — use `--limit-companies` / `--mock`
-  while iterating.
+  while iterating. Agentic query runs make several model calls (plan + tool
+  steps + synthesis); the tool budget bounds this, and simple factual queries
+  typically finish in 1–2 calls.
 - Dedup threshold 0.85 is a starting heuristic — tune with `--evaluate`.
+- The agent has no live market-data tools: it cannot quote current prices or
+  verify intraday moves beyond what retrieved articles report.
+- Answer quality depends on retrieved evidence; with weak search results the
+  agent returns an honest unverified answer rather than guessing.
 
 ## Future improvements
 

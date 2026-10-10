@@ -84,9 +84,30 @@ export interface ReportDetail {
   summary: ReportSummary;
   companies: ReportCompany[];
   findings: QueryFinding[];
+  answer: QueryAnswer | null;
   query: string | null;
   metadata: Record<string, unknown>;
   has_markdown: boolean;
+}
+
+export interface SourceRecord {
+  title: string;
+  url: string;
+  source_name: string;
+  published_at: string | null;
+  supporting_excerpt: string;
+  supports_claims: number[];
+}
+
+export interface QueryAnswer {
+  query: string;
+  task_type: string;
+  answer: string;
+  key_points: string[];
+  sources: SourceRecord[];
+  confidence: number;
+  limitations: string[];
+  verified: boolean;
 }
 
 export interface ReportsResponse {

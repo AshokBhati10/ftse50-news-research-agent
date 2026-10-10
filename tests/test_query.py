@@ -326,7 +326,7 @@ async def test_execute_query_research_zero_results(tmp_path, monkeypatch):
     from utils.cache import CacheManager
     report = await execute_query_research(
         "some obscure topic", settings, CacheManager(settings.cache_dir),
-        run_id="run_zero", max_results=10,
+        run_id="run_zero", max_results=10, agentic=False,
         on_stage=lambda s, info: stages.append(s),
     )
     assert report.findings == []
@@ -372,7 +372,8 @@ async def test_execute_query_research_stage_events_and_warnings(tmp_path, monkey
     from utils.cache import CacheManager
     report = await execute_query_research(
         "some obscure topic", settings, CacheManager(settings.cache_dir),
-        run_id="run_ev", on_stage=lambda s, info: seen.append((s, info)),
+        run_id="run_ev", agentic=False,
+        on_stage=lambda s, info: seen.append((s, info)),
     )
     assert len(report.findings) == 1
     assert report.findings[0].key_finding == "Key 1"
@@ -411,7 +412,8 @@ async def test_execute_query_research_analysis_failure_keeps_partial(tmp_path, m
     settings = _settings(tmp_path)
     from utils.cache import CacheManager
     report = await execute_query_research(
-        "q", settings, CacheManager(settings.cache_dir), run_id="run_p")
+        "q", settings, CacheManager(settings.cache_dir), run_id="run_p",
+        agentic=False)
     assert report.findings == []
     assert any("LLM down" in w for w in report.warnings)  # honest, no crash
 
@@ -427,7 +429,7 @@ def query_client(tmp_path, monkeypatch):
 
     async def fake_query_run(query, settings, cache, *, run_id="",
                              max_results=20, time_range="month", fresh=False,
-                             on_stage=None):
+                             agentic=True, on_stage=None):
         for stage, info in [("search", {"collected": 2}),
                             ("extract", {"extracted": 2}),
                             ("deduplicate", {"candidates": 2}),
@@ -483,12 +485,20 @@ def _wait_for(client, run_id, timeout=15.0):
     {"query": "banks", "max_results": 51},
     {"query": "banks", "time_range": "decade"},
     {"query": "banks", "tickers": ["AZN.L"]},
-    {"query": "banks", "agentic": True},
 ])
 def test_query_run_rejects_invalid_input(query_client, payload):
     client, _, _ = query_client
     resp = client.post("/api/research-runs", json=payload)
     assert resp.status_code in (400, 422), (payload, resp.text)
+
+
+def test_query_run_agentic_opt_out(query_client):
+    client, _, _ = query_client
+    resp = client.post("/api/research-runs", json={"query": "banks", "agentic": False})
+    assert resp.status_code == 201, resp.text
+    body = _wait_for(client, resp.json()["run_id"])
+    assert body["status"] == "completed"
+    assert body["request"]["agentic"] is False
 
 
 def test_query_run_trims_query(query_client):
@@ -530,7 +540,7 @@ def test_query_run_stage_events_over_sse(query_client, monkeypatch):
 
     async def slow_query_run(query, settings, cache, *, run_id="",
                              max_results=20, time_range="month", fresh=False,
-                             on_stage=None):
+                             agentic=True, on_stage=None):
         for stage in ("search", "extract", "deduplicate", "analyze", "report"):
             await asyncio.sleep(0.4)
             if on_stage:

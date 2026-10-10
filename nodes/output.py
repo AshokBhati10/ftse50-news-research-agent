@@ -287,7 +287,128 @@ def write_query_reports(report: QueryReport, output_dir: str | Path) -> tuple[Pa
 
     payload = report.model_dump(mode="json")
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    md_path.write_text(render_query_markdown(report), encoding="utf-8")
+    md_path.write_text(
+        render_answer_markdown(report) if report.answer else render_query_markdown(report),
+        encoding="utf-8",
+    )
 
     log.info("Wrote %s and %s", json_path, md_path)
     return json_path, md_path
+
+
+# ---------------------------------------------------------------------------
+# Answer-first reports (agentic runs)
+# ---------------------------------------------------------------------------
+
+def build_answer_report(
+    *,
+    query: str,
+    run_id: str,
+    started_at: datetime,
+    result,  # agent.research_agent.AgentResult
+    settings: Settings,
+) -> QueryReport:
+    """Assemble the answer-first machine-readable report."""
+    answer = result.answer
+    return QueryReport(
+        query=query.strip(),
+        run_id=run_id,
+        started_at=started_at,
+        search_config={
+            "task_type": result.plan.task_type.value,
+            "tool_calls": result.counts.get("tool_calls", 0),
+            "evidence_items": result.counts.get("evidence_items", 0),
+            "providers_used": sorted({e.get("source", "") for e in result.evidence
+                                      if e.get("source")}),
+        },
+        warnings=result.warnings,
+        counts=result.counts,
+        findings=result.findings,
+        answer=answer,
+        plan_summary={
+            "task_type": result.plan.task_type.value,
+            "intent_summary": result.plan.intent_summary,
+            "tools_allowed": result.plan.tools_allowed,
+            "evidence_needed": result.plan.evidence_needed,
+            "expected_answer_format": result.plan.expected_answer_format,
+            "completion_criteria": result.plan.completion_criteria,
+            "detailed": result.plan.detailed,
+            "tool_trace": [t.model_dump(mode="json") for t in result.tool_trace],
+        },
+        config_snapshot={
+            "ollama_model": settings.ollama_model or "(mock)",
+            "max_tool_calls": settings.max_tool_calls,
+        },
+    )
+
+
+def render_answer_markdown(report: QueryReport) -> str:
+    """Answer-first Markdown: the direct answer leads, evidence supports it."""
+    a = report.answer
+    date_str = report.generated_at.strftime("%Y-%m-%d")
+    lines = [
+        f"# Research Report — {date_str}",
+        "",
+        f"> **Query:** {report.query}",
+        "",
+        "## Answer",
+        "",
+        a.answer if a else "_No answer produced._",
+        "",
+    ]
+    if a and a.key_points:
+        lines.append("## Key points")
+        lines.append("")
+        for i, kp in enumerate(a.key_points, start=1):
+            cites = sorted({s_idx + 1 for s_idx, s in enumerate(a.sources)
+                            if i - 1 in s.supports_claims})
+            ref = f" [{', '.join(map(str, cites))}]" if cites else ""
+            lines.append(f"{i}. {kp}{ref}")
+        lines.append("")
+    if a and a.sources:
+        lines.append("## Sources")
+        lines.append("")
+        for i, s in enumerate(a.sources, start=1):
+            date = _fmt_date(s.published_at)
+            lines.append(f"{i}. [{s.title}]({s.url}) — {s.source_name or 'unknown'} · {date}")
+            if s.supporting_excerpt:
+                excerpt = " ".join(s.supporting_excerpt.split())[:280]
+                lines.append(f"   _{excerpt}…_")
+        lines.append("")
+    if a and (a.limitations or a.confidence < 1.0):
+        lines.append("## Confidence & limitations")
+        lines.append("")
+        lines.append(f"- Confidence: **{a.confidence:.2f}**"
+                     + ("" if a.verified else " (unverified)"))
+        for lim in a.limitations:
+            lines.append(f"- {lim}")
+        lines.append("")
+    lines.append("## Research details")
+    lines.append("")
+    ps = report.plan_summary or {}
+    lines.append(f"- Task type: {ps.get('task_type', 'n/a')}")
+    lines.append(f"- Tool calls: {report.counts.get('tool_calls', 0)}")
+    lines.append(f"- Evidence items: {report.counts.get('evidence_items', 0)}")
+    if report.warnings:
+        lines.append("- Warnings:")
+        for w in report.warnings:
+            lines.append(f"  - {w}")
+    trace = ps.get("tool_trace", [])
+    if trace:
+        lines.append("- Tool trace:")
+        for t in trace:
+            lines.append(f"  - `{t.get('tool')}` ({t.get('arguments_summary', '')}) "
+                         f"→ {t.get('observation_summary', '')}")
+    lines.append("")
+    if report.findings:
+        lines.append("## Ranked findings (detailed mode)")
+        lines.append("")
+        for j, f in enumerate(report.findings, start=1):
+            lines.append(f"### {j}. {f.title}")
+            lines.append("")
+            lines.append(f"- Relevance: **{f.relevance:.2f}** · "
+                         f"Impact: **{f.impact.value}** (confidence {f.confidence:.2f})")
+            lines.append(f"- Key finding: {f.key_finding}")
+            lines.append(f"- Link: {f.url}")
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"

@@ -64,9 +64,13 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------------ retries
     llm_max_retries: int = 3
+    llm_timeout_s: float = 90.0
     crawl_max_retries: int = 2
     crawl_timeout_s: float = 45.0
     extraction_min_chars: int = 400
+
+    # ------------------------------------------------------- agentic research
+    max_tool_calls: int = 5  # hard bound on tool calls per query run
 
     @field_validator("dedup_similarity_threshold")
     @classmethod
