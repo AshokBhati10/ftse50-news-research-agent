@@ -79,7 +79,7 @@ async def test_mock_pipeline_end_to_end():
 
     import numpy as np
 
-    import main as main_mod
+    from nodes import runner as runner_mod
     from nodes.deduplication import SemanticDeduper
 
     settings = _settings()
@@ -91,7 +91,7 @@ async def test_mock_pipeline_end_to_end():
     arts[0].content = "Body text. " * 20
     deduper = SemanticDeduper(embed_fn=lambda texts: np.ones((len(texts), 2)))
 
-    report = await main_mod.run_company_pipeline(
+    report = await runner_mod.run_company_pipeline(
         company, settings, cache=None, deduper=deduper,
         search_sem=asyncio.Semaphore(1), llm_sem=asyncio.Semaphore(1),
         mock_articles=arts,
@@ -105,7 +105,7 @@ async def test_mock_pipeline_end_to_end():
 async def test_live_company_failure_recorded_and_continues(monkeypatch):
     """Live path: analyze_company raises -> CompanyReport with notes, no raise."""
     import asyncio
-    import main as main_mod
+    from nodes import runner as runner_mod
     from nodes import analysis as analysis_mod
     from nodes import search as search_node
 
@@ -136,7 +136,7 @@ async def test_live_company_failure_recorded_and_continues(monkeypatch):
 
     settings = _settings()
     company = Company(name="AstraZeneca", ticker="AZN.L", market_cap=1e11)
-    report = await main_mod.run_company_pipeline(
+    report = await runner_mod.run_company_pipeline(
         company, settings, cache=None, deduper=deduper,
         search_sem=asyncio.Semaphore(1), llm_sem=asyncio.Semaphore(1),
     )

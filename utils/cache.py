@@ -76,3 +76,11 @@ class CacheManager:
         self.search = FileCache(root, ttl_seconds=24 * 3600, enabled=enabled)      # search results
         self.extraction = FileCache(root, ttl_seconds=7 * 86400, enabled=enabled)  # article text
         self.analysis = FileCache(root, ttl_seconds=24 * 3600, enabled=enabled)    # LLM judgements
+        self._root = root
+
+    def size(self) -> int:
+        """Number of cache files currently on disk (across namespaces)."""
+        try:
+            return sum(1 for _ in self._root.rglob("*") if _.is_file())
+        except OSError:
+            return 0

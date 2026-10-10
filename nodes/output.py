@@ -107,6 +107,16 @@ def write_reports(report: FullReport, output_dir: str | Path) -> tuple[Path, Pat
 
     json_path = output_dir / f"report_{date_str}.json"
     md_path = output_dir / f"report_{date_str}.md"
+    # Never silently clobber a previous report from the same day: suffix
+    # with a counter (report_2026-10-10_2.json, …).
+    if json_path.exists() or md_path.exists():
+        n = 2
+        while (output_dir / f"report_{date_str}_{n}.json").exists() or (
+            output_dir / f"report_{date_str}_{n}.md"
+        ).exists():
+            n += 1
+        json_path = output_dir / f"report_{date_str}_{n}.json"
+        md_path = output_dir / f"report_{date_str}_{n}.md"
 
     payload = report.model_dump(mode="json")
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")

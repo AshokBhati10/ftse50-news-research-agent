@@ -66,3 +66,15 @@ def test_write_reports_creates_both_files(tmp_path):
                   "sentiment", "reason", "confidence", "evidence_excerpt"):
         assert field in article, field
     assert article["impact"] == "High"
+
+
+def test_write_reports_never_overwrites_same_day(tmp_path):
+    settings = Settings()
+    full = build_full_report([_report()], settings)
+    first_json, first_md = write_reports(full, tmp_path)
+    second_json, second_md = write_reports(full, tmp_path)
+    assert first_json.name.startswith("report_") and first_json.suffix == ".json"
+    assert second_json.name != first_json.name
+    assert second_json.name.endswith("_2.json")
+    assert second_md.name.endswith("_2.md")
+    assert first_json.exists() and second_json.exists()  # nothing clobbered

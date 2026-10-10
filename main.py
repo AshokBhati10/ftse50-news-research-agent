@@ -31,7 +31,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from config.settings import Settings  # noqa: E402
 from utils.cache import CacheManager  # noqa: E402
 from utils.models import Article, Company, CompanyReport  # noqa: E402
-from utils.source_quality import rank_by_source_quality  # noqa: E402
 
 log = logging.getLogger("ftse50")
 
@@ -97,88 +96,10 @@ def load_mock_companies(settings: Settings) -> tuple[list[Company], dict[str, li
 
 
 # ---------------------------------------------------------------------------
-# Per-company pipeline
+# Per-company pipeline (shared with the API — see nodes/runner.py)
 # ---------------------------------------------------------------------------
 
-async def run_company_pipeline(
-    company: Company,
-    settings: Settings,
-    cache: CacheManager,
-    deduper,
-    search_sem: asyncio.Semaphore,
-    llm_sem: asyncio.Semaphore,
-    mock_articles: list[Article] | None = None,
-) -> CompanyReport:
-    """Deterministic pipeline for one company; never raises (records failure)."""
-    from nodes.analysis import AnalysisError, analyze_company, heuristic_analyze
-    from nodes.crawl import extract_articles
-    from nodes.search import search_company_news
-
-    notes: list[str] = []
-    providers: list[str] = []
-    fallback_used = False
-
-    try:
-        if mock_articles is not None:
-            articles = list(mock_articles)
-            for a in articles:
-                a.company, a.ticker = company.name, company.ticker
-                a.evidence_excerpt = (a.content or "")[:500]
-            providers = ["mock"]
-            rank_by_source_quality(articles)  # deterministic, also useful in mock mode
-        else:
-            async with search_sem:
-                outcome = await search_company_news(company, settings, cache)
-            articles = outcome.articles
-            providers = outcome.providers_used
-            fallback_used = outcome.fallback_used
-            if outcome.notes:
-                notes.append(outcome.notes)
-
-            if not articles:
-                notes.append("No candidate articles found; skipping.")
-                return CompanyReport(
-                    company=company.name, ticker=company.ticker,
-                    market_cap=company.market_cap, articles=[],
-                    candidates_considered=0, providers_used=providers,
-                    fallback_used=fallback_used, notes=" ".join(notes),
-                )
-
-            # Source-quality rank -> keep only the most promising for extraction.
-            rank_by_source_quality(articles)
-            pool = articles[: settings.max_articles_per_company + 5]
-            articles = await extract_articles(pool, settings, cache)
-
-        # Semantic dedup on extracted content, then trim to the analysis budget.
-        articles = await deduper.deduplicate_async(articles)
-        articles = articles[: settings.max_articles_per_company]
-
-        if mock_articles is not None:
-            ranked = heuristic_analyze(company, articles, top_n=settings.top_n_articles)
-        else:
-            async with llm_sem:
-                try:
-                    ranked = await analyze_company(company, articles, settings, cache)
-                except AnalysisError as exc:
-                    notes.append(str(exc))
-                    log.error("[%s] %s — continuing with other companies", company.ticker, exc)
-                    ranked = []
-
-        return CompanyReport(
-            company=company.name, ticker=company.ticker,
-            market_cap=company.market_cap, articles=ranked,
-            candidates_considered=len(articles), providers_used=providers,
-            fallback_used=fallback_used, notes=" ".join(notes),
-        )
-    except Exception as exc:  # noqa: BLE001 — one company must never kill the run
-        log.exception("[%s] unexpected pipeline failure", company.ticker)
-        return CompanyReport(
-            company=company.name, ticker=company.ticker,
-            market_cap=company.market_cap, articles=[],
-            candidates_considered=0, providers_used=providers,
-            fallback_used=fallback_used,
-            notes=f"Pipeline error: {exc}",
-        )
+from nodes.runner import execute_research_run, run_company_pipeline  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +141,6 @@ async def amain(args: argparse.Namespace) -> int:
         return 2
 
     log.info("Researching %d companies …", len(companies))
-    deduper = build_deduper(settings)
-    search_sem = asyncio.Semaphore(settings.max_search_concurrency)
-    llm_sem = asyncio.Semaphore(settings.max_llm_concurrency)
 
     use_rich = False
     progress = None
@@ -236,20 +154,18 @@ async def amain(args: argparse.Namespace) -> int:
     except Exception:
         pass
 
-    async def _wrapped(company: Company) -> CompanyReport:
-        try:
-            if args.agentic and not use_mock:
-                from agent.agent import run_company_agent
-                return await run_company_agent(company, settings, cache)
-            return await run_company_pipeline(
-                company, settings, cache, deduper, search_sem, llm_sem,
-                mock_articles=mock_map.get(company.ticker, []) if use_mock else None,
-            )
-        finally:
-            if use_rich:
-                progress.update(task_id, advance=1)
+    def _on_complete(report: CompanyReport) -> None:
+        if use_rich:
+            progress.update(task_id, advance=1)
 
-    reports = await asyncio.gather(*(_wrapped(c) for c in companies))
+    reports = await execute_research_run(
+        companies,
+        settings,
+        cache,
+        mock_articles=mock_map if use_mock else None,
+        agentic=args.agentic,
+        on_company_complete=_on_complete,
+    )
     if use_rich:
         progress.stop()
 
