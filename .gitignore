@@ -53,3 +53,11 @@ desktop.ini
 *.bak
 tmp/
 temp/
+
+# Web UI (React + Vite)
+web/node_modules/
+web/dist/
+web/.vite/
+
+# API run-state is runtime data (same policy as data/cache)
+data/cache/runs/

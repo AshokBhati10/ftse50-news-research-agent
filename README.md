@@ -141,7 +141,8 @@ uv run python main.py --evaluate              # Pydantic Evals suite
 uv run pytest                                 # unit tests
 ```
 
-Reports land in `data/output/report_YYYY-MM-DD.{json,md}`.
+Reports land in `data/output/report_YYYY-MM-DD.{json,md}` (a numeric suffix is
+added instead of overwriting when a report for the same day already exists).
 
 ### Mock mode
 
@@ -149,6 +150,59 @@ Reports land in `data/output/report_YYYY-MM-DD.{json,md}`.
 (`data/mock/mock_news.json`: 5 companies × 10 articles) with a deterministic
 heuristic analyser — zero API cost, zero network. Use it to validate plumbing,
 report rendering and the evaluation harness.
+
+---
+
+## Web UI + API
+
+A dark financial-terminal-style dashboard (React 18 + TypeScript + Vite +
+Tailwind, Recharts, Lucide) backed by a small FastAPI layer that drives the
+**same** Python pipeline the CLI uses — no duplicated research logic.
+
+Pages: **Overview** (summary cards, key-articles table, sentiment/impact/
+coverage charts), **Research Runs** (company picker + options form, live
+SSE progress, run history), **Reports** (library, search/filter/sort, JSON +
+Markdown downloads), **Companies** (real FTSE 50 universe with coverage from
+the latest report), **Settings** (service health and non-secret config status).
+
+```bash
+# 1. Python API (from the repo root; uses the same uv environment and .env)
+uv run uvicorn api.app:app --host 127.0.0.1 --port 8000
+# or: uv run python -m api
+
+# 2. Frontend (separate terminal)
+cd web
+npm install
+npm run dev        # http://localhost:5173, /api proxied to :8000
+```
+
+Production frontend build: `cd web && npm run build` (outputs `web/dist/`).
+Frontend tests / typecheck: `npm test`, `npm run typecheck`.
+Backend tests: `uv run pytest` (includes `tests/test_api_*.py`).
+
+Key API endpoints: `GET /api/health`, `GET /api/companies`,
+`GET /api/reports`, `GET /api/reports/latest`, `GET /api/reports/{id}`,
+`GET /api/reports/{id}/download?format=json|md`, `POST /api/research-runs`,
+`GET /api/research-runs`, `GET /api/research-runs/{id}`,
+`GET /api/research-runs/{id}/events` (SSE), `POST /api/research-runs/{id}/cancel`,
+`GET /api/settings/status`.
+
+Notes:
+
+- Only **one research run may be active at a time** (second `POST` → 409);
+  cancelling keeps honest partial results. Run state is persisted under
+  `data/cache/runs/` so a browser refresh never loses track of a run.
+- Live runs require `OLLAMA_API_KEY` (the API rejects run creation without
+  it); tickers are validated against the backend's FTSE 50 list.
+- The Settings page reports *whether* the LLM/search services are configured
+  — API keys are never returned by any endpoint, logged, or stored in the
+  browser. Configuration lives in the backend `.env`; the UI has no
+  credential inputs. `VITE_API_BASE_URL` may point the frontend at another
+  API origin (no secrets in `VITE_*` variables).
+- CORS defaults to `http://localhost:5173` (+ 127.0.0.1); override with the
+  `FRONTEND_ORIGINS` environment variable (comma-separated) for deployment.
+- The UI is intended for local single-user use and has no login — do not
+  expose the backend publicly without a security review.
 
 ---
 
@@ -201,7 +255,17 @@ unless `OLLAMA_*` is configured (reported, not faked). The dedup threshold
 
 ```
 ftse50-news-agent/
-├── main.py                 # CLI + pipeline orchestration
+├── main.py                 # CLI (uses nodes/runner.py orchestration)
+├── api/                    # FastAPI backend for the web UI
+│   ├── app.py              # app factory, CORS, lifespan
+│   ├── schemas.py          # typed request/response models (no secrets)
+│   ├── routes/             # health, companies, reports, runs, settings
+│   └── services/           # report reading, run manager (SSE), health checks
+├── web/                    # React 18 + TypeScript + Vite + Tailwind UI
+│   └── src/
+│       ├── components/     # design system (ui.tsx), layout, article dialog
+│       ├── features/      # dashboard, runs, reports, companies, settings
+│       └── lib/           # typed API client, formatters
 ├── config/settings.py      # validated, centralised configuration
 ├── agent/agent.py          # Pydantic AI agent + tools (pipeline & agentic modes)
 ├── nodes/
@@ -210,7 +274,8 @@ ftse50-news-agent/
 │   ├── crawl.py            # Crawl4AI extraction + fallback
 │   ├── deduplication.py    # URL + semantic dedup
 │   ├── analysis.py         # Ollama analysis (Pydantic AI) + mock heuristic
-│   └── output.py           # JSON + Markdown reports
+│   ├── output.py           # JSON + Markdown reports
+│   └── runner.py           # shared per-company orchestration (CLI + API)
 ├── utils/                  # models, cache, rate limiter, query builder, source quality
 ├── evaluation.py / eval_data/
 ├── tests/
