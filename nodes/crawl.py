@@ -21,6 +21,11 @@ from lxml import html as lxml_html
 from config.settings import Settings
 from utils.cache import CacheManager
 from utils.models import Article
+from utils.net_guard import (
+    UnsafeURLError,
+    assert_public_url,
+    assert_public_url_resolved,
+)
 from utils.rate_limiter import retry_async
 
 log = logging.getLogger(__name__)
@@ -58,21 +63,40 @@ def fallback_extract(url: str, html: str, min_chars: int = 400) -> str | None:
 
 
 async def _fallback_fetch(url: str, settings: Settings) -> str | None:
+    """Fetch with per-hop SSRF validation; redirects are followed manually
+    so a redirect to a private/loopback target can never be fetched."""
     try:
+        current = url
         async with httpx.AsyncClient(
             timeout=20.0,
             headers={"User-Agent": "Mozilla/5.0 (compatible; FTSE50NewsAgent/1.0)"},
-            follow_redirects=True,
+            follow_redirects=False,
         ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            ctype = resp.headers.get("content-type", "")
-            if "html" not in ctype:
-                return None
-            return fallback_extract(url, resp.text, settings.extraction_min_chars)
+            for _hop in range(5):
+                await assert_public_url_resolved(current)
+                resp = await client.get(current)
+                if resp.is_redirect or resp.status_code in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("location")
+                    if not location:
+                        break
+                    current = _join_url(current, location)
+                    continue
+                resp.raise_for_status()
+                ctype = resp.headers.get("content-type", "")
+                if "html" not in ctype:
+                    return None
+                return fallback_extract(current, resp.text,
+                                        settings.extraction_min_chars)
+            log.warning("Redirect limit reached fetching %s", url)
+            return None
     except Exception as exc:  # noqa: BLE001 — fallback must not raise
         log.debug("Fallback extraction failed for %s: %s", url, exc)
         return None
+
+
+def _join_url(base: str, location: str) -> str:
+    from urllib.parse import urljoin
+    return urljoin(base, location)
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +117,12 @@ async def _crawl4ai_extract(url: str, settings: Settings) -> str | None:
         result = await crawler.arun(url=url, config=run_cfg)
     if not result or not result.success:
         raise RuntimeError(f"crawl4ai unsuccessful: {getattr(result, 'error_message', 'unknown')}")
+    # Redirected to a non-public host? Discard rather than expose it.
+    final_url = getattr(result, "url", "") or url
+    try:
+        await assert_public_url_resolved(final_url)
+    except UnsafeURLError as exc:
+        raise RuntimeError(f"blocked: redirected to a non-public URL: {exc}") from exc
     text = (result.markdown or "").strip()
     return text if len(text) >= settings.extraction_min_chars else None
 
@@ -114,6 +144,16 @@ async def extract_article(
     """Extract full text for one article, applying the failure policy."""
     sem = semaphore or _CRAWL_SEMAPHORE
     key = _cache_key(article.url)
+
+    # SSRF guard: never fetch private/loopback/link-local targets. Fail the
+    # article (not the run): callers aggregate concurrently per batch.
+    try:
+        assert_public_url(article.url)
+        await assert_public_url_resolved(article.url)
+    except UnsafeURLError as exc:
+        log.warning("Blocked fetch of non-public URL %s: %s", article.url, exc)
+        article.extraction_status = "failed"
+        return article
 
     if cache:
         hit = cache.extraction.get("extraction", key)

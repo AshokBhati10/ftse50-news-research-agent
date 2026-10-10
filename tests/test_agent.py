@@ -116,6 +116,27 @@ def test_planner_sanitizes_llm_plan(monkeypatch):
     assert plan.max_tool_calls == settings.max_tool_calls  # clamped
 
 
+def test_planner_summarization_plan_always_gets_fetch_article(monkeypatch):
+    """A summarization plan without fetch_article would be unable to fetch
+    the target article; sanitization must add it."""
+    settings = _settings()
+    planner = QueryPlanner(settings, run_id="t3")
+    weak = ResearchPlan(
+        task_type=TaskType.SUMMARIZATION,
+        intent_summary="Summarize the article",
+        needs_web_research=False,
+        tools_allowed=["web_search"],
+        search_queries=[],
+    )
+    monkeypatch.setattr(planner, "_llm", lambda: _FakePlannerLLM(weak))
+    import asyncio
+    plan = asyncio.get_event_loop().run_until_complete(
+        planner.plan("Summarize this article: https://example.com/a"))
+    assert plan.tools_allowed == ["fetch_article"]
+    assert plan.search_queries == []
+    assert not plan.needs_web_research
+
+
 def test_planner_falls_back_when_llm_down(monkeypatch):
     from agent import planner as planner_mod
 
@@ -158,6 +179,39 @@ async def test_executor_rejects_bad_args():
         await ex.execute("fetch_article", {"url": "not-a-url"})
     with pytest.raises(ToolValidationError):
         await ex.execute("web_search", {"query": "x", "time_range": "decade"})
+
+
+@pytest.mark.parametrize("url", [
+    "http://localhost:8000/admin",
+    "http://127.0.0.1:9000/secret",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://192.168.1.5/x",
+    "http://[::1]/x",
+    "http://user:pass@internal.example/x",
+    "https://example.com:8443/x",
+    "file:///etc/passwd",
+])
+@pytest.mark.asyncio
+async def test_executor_rejects_ssrf_fetch_targets(url):
+    ex = ToolExecutor(ToolRegistry(_settings()))
+    with pytest.raises(ToolValidationError):
+        await ex.execute("fetch_article", {"url": url})
+
+
+@pytest.mark.asyncio
+async def test_executor_accepts_public_fetch_target(monkeypatch):
+    ex = ToolExecutor(ToolRegistry(_settings()))
+    ran = {"n": 0}
+
+    async def fake_fetch(self, args):
+        ran["n"] += 1
+        return {"ok": True, "url": args.url, "content": "text",
+                "extraction_status": "ok"}
+
+    monkeypatch.setattr(ArticleExtractor, "run", fake_fetch)
+    obs = await ex.execute("fetch_article", {"url": "https://example.com/article"})
+    assert obs.get("ok") is True
+    assert ran["n"] == 1
 
 
 @pytest.mark.asyncio
@@ -356,13 +410,22 @@ async def test_agent_tool_calls_bounded(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_agent_disallowed_tool_stops_loop(monkeypatch):
+async def test_agent_disallowed_tool_request_not_executed_and_bounded(monkeypatch):
+    """Regression: a model request for a tool outside the plan's allowlist is
+    never executed, warns, and cannot spin the loop forever."""
     settings = _settings()
     agent = ResearchAgent(settings, cache=None, run_id="d1")
     plan = ResearchPlan(task_type=TaskType.GENERAL, intent_summary="x",
                         tools_allowed=["web_search"], search_queries=[],
                         max_tool_calls=5)
     monkeypatch.setattr(QueryPlanner, "plan", lambda self, q: _coro(plan))
+    fetches = {"n": 0}
+
+    async def fake_fetch(self, args):
+        fetches["n"] += 1
+        return {"ok": True, "url": args.url}
+
+    monkeypatch.setattr(ArticleExtractor, "run", fake_fetch)
     monkeypatch.setattr(ResearchAgent, "_next_step",
                         lambda self, q, p, t, c: _coro(
                             AgentStep(action="call_tool", tool_name="fetch_article",
@@ -372,6 +435,151 @@ async def test_agent_disallowed_tool_stops_loop(monkeypatch):
                             QueryAnswer.unverified(q, TaskType.GENERAL, ["none"])))
     result = await agent.research("q")
     assert any("disallowed tool" in w for w in result.warnings)
+    assert fetches["n"] == 0  # the disallowed tool never executed
+    assert all(t.tool != "fetch_article" or not t.ok
+               for t in result.tool_trace)
+    assert result.counts["tool_calls"] == 0
+    # Bounded: repeated disallowed requests stop the loop instead of spinning.
+    assert len(result.tool_trace) <= 2
+
+
+@pytest.mark.asyncio
+async def test_agent_recovers_after_disallowed_request(monkeypatch):
+    """Regression for 'Agent requested disallowed tool; stopped': one bad
+    tool choice must not end research — the loop continues and executes a
+    later allowed tool within the remaining budget."""
+    settings = _settings()
+    agent = ResearchAgent(settings, cache=None, run_id="d2")
+    plan = ResearchPlan(task_type=TaskType.GENERAL, intent_summary="x",
+                        tools_allowed=["web_search"], search_queries=["q1"],
+                        max_tool_calls=5)
+    monkeypatch.setattr(QueryPlanner, "plan", lambda self, q: _coro(plan))
+
+    fetches = {"n": 0}
+
+    async def fake_fetch(self, args):
+        fetches["n"] += 1
+        return {"ok": True, "url": args.url}
+
+    monkeypatch.setattr(ArticleExtractor, "run", fake_fetch)
+
+    async def fake_search(self, args):
+        return _fake_search_results()
+
+    monkeypatch.setattr(SearchTool, "run", fake_search)
+
+    steps = [
+        AgentStep(action="call_tool", tool_name="fetch_article",
+                  arguments={"url": "https://example.com/x"}),
+        AgentStep(action="call_tool", tool_name="web_search",
+                  arguments={"query": "follow-up"}),
+        AgentStep(action="finish", reason="done"),
+    ]
+    seq = {"i": 0}
+
+    async def scripted_next_step(self, q, p, t, c):
+        step = steps[min(seq["i"], len(steps) - 1)]
+        seq["i"] += 1
+        return step
+
+    monkeypatch.setattr(ResearchAgent, "_next_step", scripted_next_step)
+    monkeypatch.setattr(ResearchAnalyzer, "synthesize",
+                        lambda self, q, p, e: _coro(_ceo_answer()))
+
+    result = await agent.research("recoverable tool-selection mistake")
+    assert fetches["n"] == 0
+    rejected = [t for t in result.tool_trace
+                if t.tool == "fetch_article" and not t.ok]
+    assert len(rejected) == 1
+    assert any("disallowed tool" in w for w in result.warnings)
+    # The allowed follow-up search still executed after the rejection.
+    assert any(t.tool == "web_search" and t.ok for t in result.tool_trace)
+    assert result.counts["tool_calls"] == 2
+    assert len(result.evidence) >= 2
+
+
+@pytest.mark.asyncio
+async def test_agent_allowed_fetch_article_executes(monkeypatch):
+    """When the plan allows fetch_article, a model request for it must be
+    advertised, executed, and its content added to the evidence pool."""
+    settings = _settings()
+    agent = ResearchAgent(settings, cache=None, run_id="f1")
+    plan = ResearchPlan(task_type=TaskType.NEWS_RESEARCH, intent_summary="x",
+                        tools_allowed=["web_search", "fetch_article"],
+                        search_queries=["q1"], max_tool_calls=5)
+    monkeypatch.setattr(QueryPlanner, "plan", lambda self, q: _coro(plan))
+
+    fetches = {"n": 0}
+
+    async def fake_fetch(self, args):
+        fetches["n"] += 1
+        return {"ok": True, "url": args.url, "title": "Fetched",
+                "published_at": "2024-09-06T00:00:00+00:00",
+                "extraction_status": "ok",
+                "content": "Full text confirms the claim in detail.",
+                "source": "hsbc.com"}
+
+    monkeypatch.setattr(ArticleExtractor, "run", fake_fetch)
+
+    async def fake_search(self, args):
+        return _fake_search_results()
+
+    monkeypatch.setattr(SearchTool, "run", fake_search)
+
+    steps = [
+        AgentStep(action="call_tool", tool_name="fetch_article",
+                  arguments={"url":
+                             "https://www.hsbc.com/news/2024/elhedery-profile"}),
+        AgentStep(action="finish", reason="enough"),
+    ]
+    seq = {"i": 0}
+
+    async def scripted_next_step(self, q, p, t, c):
+        step = steps[min(seq["i"], len(steps) - 1)]
+        seq["i"] += 1
+        return step
+
+    monkeypatch.setattr(ResearchAgent, "_next_step", scripted_next_step)
+    monkeypatch.setattr(ResearchAnalyzer, "synthesize",
+                        lambda self, q, p, e: _coro(_ceo_answer()))
+
+    result = await agent.research("Who is the CEO of HSBC Holdings?")
+    assert fetches["n"] == 1
+    assert any(t.tool == "fetch_article" and t.ok for t in result.tool_trace)
+    assert any(e.get("kind") == "article" for e in result.evidence)
+
+
+@pytest.mark.asyncio
+async def test_next_step_prompt_advertises_only_plan_tools(monkeypatch):
+    """Regression for 'Agent requested disallowed tool fetch_article': the
+    follow-up prompt must advertise only the tools the plan allows, so the
+    model's tool choices cannot exceed the plan."""
+    captured: dict = {}
+
+    class _FakeStepLLM:
+        def __init__(self, settings, *, system_prompt="", output_type=None,
+                     run_id=""):
+            captured["prompt"] = system_prompt
+
+        async def run(self, prompt):
+            return AgentStep(action="finish", reason="ok")
+
+    monkeypatch.setattr("agent.research_agent.LLMClient", _FakeStepLLM)
+    agent = ResearchAgent(_settings(), cache=None, run_id="p1")
+    plan = ResearchPlan(task_type=TaskType.GENERAL, intent_summary="x",
+                        tools_allowed=["web_search"], max_tool_calls=3)
+    step = await agent._next_step("q", plan, [], 0)
+    assert step.action == "finish"
+    text = captured["prompt"]
+    assert "web_search(" in text
+    assert "fetch_article" not in text
+
+    plan_both = ResearchPlan(task_type=TaskType.GENERAL, intent_summary="x",
+                             tools_allowed=["web_search", "fetch_article"],
+                             max_tool_calls=3)
+    await agent._next_step("q", plan_both, [], 0)
+    text_both = captured["prompt"]
+    assert "web_search(" in text_both and "fetch_article(" in text_both
 
 
 def _coro(value):

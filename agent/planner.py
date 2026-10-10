@@ -57,6 +57,13 @@ task-specific research plan as structured output. Choose exactly one task type:
 Keep search_queries short (<=5) and specific. For factual lookups prefer 1-2
 queries aimed at authoritative sources. Set detailed=true only when the user
 explicitly asks for detailed/multiple/ranked/comprehensive research.
+
+Available tools for tools_allowed (choose only from these):
+- web_search: web search returning ranked results with title, url, snippet.
+- fetch_article: fetch the full text of one article URL.
+Include web_search whenever new searches may be needed, and include
+fetch_article for summarization of a provided URL and when reading a full
+article would strengthen the evidence.
 """
 
 _PLAN_PROMPT = """\
@@ -157,6 +164,12 @@ class QueryPlanner:
         allowed = [t for t in plan.tools_allowed if t in PERMITTED_TOOLS]
         if not allowed:
             allowed = ["web_search", "fetch_article"]
+        # A summarization plan must be able to fetch the target article,
+        # otherwise the run can only end unverified.
+        if (plan.task_type == TaskType.SUMMARIZATION
+                and re.search(r"https?://\S+", query)
+                and "fetch_article" not in allowed):
+            allowed.append("fetch_article")
         queries = [q for q in plan.search_queries if q][:5]
         if plan.needs_web_research and not queries and "web_search" in allowed:
             queries = [query]  # never plan a web search with no query

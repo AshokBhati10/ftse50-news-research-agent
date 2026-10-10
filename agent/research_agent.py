@@ -31,16 +31,18 @@ from .tools import SearchTool as _SearchTool  # noqa: F401 (re-export for tests)
 log = logging.getLogger(__name__)
 
 _STEP_SYSTEM = BASE_SYSTEM_PROMPT + """\
-You decide the next step of a research task. You have these tools:
+You decide the next step of a research task. For this task you may call only \
+these tools:
 {tools}
 
 Reply with structured output:
-- action "call_tool" to use a tool (give tool_name and arguments), or
+- action "call_tool" to use one of the tools above (give tool_name and arguments), or
 - action "finish" when the evidence is sufficient to answer, or when further
   calls are unlikely to help.
 
-Rules: never repeat an identical call; prefer fetching a promising article
-over another broad search; stop early when the completion criteria are met.
+Rules: only request tools from the list above; never repeat an identical call;
+prefer fetching a promising article over another broad search; stop early when
+the completion criteria are met.
 """
 
 
@@ -257,16 +259,34 @@ class ResearchAgent:
                     break  # enough material; save the remaining budget
 
         # --- model-driven follow-ups ------------------------------------
+        # A tool request outside the plan's allowlist is a recoverable model
+        # mistake: it is not executed, but the loop continues with the
+        # remaining budget (bounded rejections prevent spinning in place).
+        rejections = 0
         while calls < plan.max_tool_calls and plan.needs_web_research:
             step = await self._next_step(query, plan, tool_trace, calls)
             if step.action == "finish":
                 log.info("[%s] agent finished after %d tool call(s): %s",
                          self.run_id, calls, step.reason)
                 break
-            if step.tool_name not in plan.tools_allowed:
+            if step.tool_name not in plan.tools_allowed \
+                    or self.registry.get(step.tool_name) is None:
+                rejections += 1
                 warnings.append(f"Agent requested disallowed tool "
-                                f"{step.tool_name!r}; stopped.")
-                break
+                                f"{step.tool_name!r}; request skipped.")
+                tool_trace.append(ToolTraceEntry(
+                    tool=step.tool_name,
+                    arguments_summary=self._args_summary(step.tool_name,
+                                                         step.arguments or {}),
+                    observation_summary="rejected: tool not allowed by plan",
+                    ok=False))
+                log.warning("[%s] rejected disallowed tool request %r",
+                            self.run_id, step.tool_name)
+                if rejections >= 2:
+                    warnings.append("Stopped after repeated disallowed tool "
+                                    "requests.")
+                    break
+                continue
             obs = await _call(step.tool_name, step.arguments or {})
             if step.tool_name == "web_search":
                 _ingest([self._evidence_from_search(r)
@@ -305,9 +325,13 @@ class ResearchAgent:
     # -- model-driven step ----------------------------------------------
     async def _next_step(self, query: str, plan: ResearchPlan,
                          trace: list[ToolTraceEntry], calls: int) -> AgentStep:
+        # Advertise only the tools the plan allows, so the model's tool choice
+        # and the plan's allowlist cannot diverge.
+        allowed = [t for t in plan.tools_allowed if self.registry.get(t)]
         llm = LLMClient(
             self.settings,
-            system_prompt=_STEP_SYSTEM.format(tools=self.registry.describe()),
+            system_prompt=_STEP_SYSTEM.format(
+                tools=self.registry.describe(allowed or list(plan.tools_allowed))),
             output_type=AgentStep,
             run_id=self.run_id,
         )

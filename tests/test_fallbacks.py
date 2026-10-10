@@ -170,3 +170,70 @@ def test_fallback_extract_ignores_navigation_and_advertisements():
     assert "AstraZeneca announced new clinical trial results" in text
     assert "Unrelated navigation content" not in text
     assert "Buy this stock now" not in text
+
+
+# ---------------------------------------------------------------------------
+# SSRF guards: private targets blocked; redirects validated per hop
+# ---------------------------------------------------------------------------
+
+async def test_extract_article_blocks_private_url(monkeypatch):
+    """A search result pointing at a private address must fail the article
+    (never the run) and must never be fetched."""
+    fetched = {"n": 0}
+
+    async def boom_crawl(url, settings):
+        fetched["n"] += 1
+        raise AssertionError("crawl4ai must not run for private URLs")
+
+    monkeypatch.setattr(crawl_mod, "_crawl4ai_extract", boom_crawl)
+
+    article = Article(
+        company="X", ticker="", title="t",
+        url="http://169.254.169.254/latest/meta-data/",
+        snippet="s", search_provider="searxng")
+    out = await crawl_mod.extract_article(article, _settings(), cache=None)
+    assert out.extraction_status == "failed"
+    assert fetched["n"] == 0
+
+
+async def test_fallback_fetch_follows_public_redirect_only(monkeypatch):
+    """Redirects are followed manually and validated hop by hop: public hops
+    succeed, redirects to loopback/private targets are never fetched."""
+    import httpx
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.path == "/public-redirect":
+            return httpx.Response(
+                302, headers={"Location": "http://final.example.com/article"})
+        if request.url.path == "/private-redirect":
+            return httpx.Response(
+                302, headers={"Location": "http://127.0.0.1:9100/secret"})
+        if request.url.path == "/article":
+            body = ("<html><body><article><p>%s</p></article></body></html>"
+                    % ("Enough readable body text for extraction. " * 30))
+            return httpx.Response(200, text=body,
+                                  headers={"content-type": "text/html"})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+
+    def factory(**kwargs):
+        kwargs["transport"] = transport
+        return real_client(**kwargs)
+
+    monkeypatch.setattr(crawl_mod.httpx, "AsyncClient", factory)
+
+    ok = await crawl_mod._fallback_fetch(
+        "http://start.example.com/public-redirect", _settings())
+    assert ok is not None
+    assert "Enough readable body text" in ok
+
+    blocked = await crawl_mod._fallback_fetch(
+        "http://start.example.com/private-redirect", _settings())
+    assert blocked is None
+    assert not any(":9100" in u for u in seen)  # private hop never fetched
+    assert any(u.endswith("/article") for u in seen)  # public hop was fetched

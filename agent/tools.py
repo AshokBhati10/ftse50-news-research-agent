@@ -26,6 +26,7 @@ from nodes.search import (
 )
 from utils.cache import CacheManager
 from utils.models import Article, PERMITTED_TOOLS
+from utils.net_guard import UnsafeURLError, assert_public_url
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +71,11 @@ class FetchArticleArgs(BaseModel):
         v = v.strip()
         if not v.lower().startswith(("http://", "https://")):
             raise ValueError("url must be absolute http(s)")
+        # SSRF guard: http(s) only, public host/IP, no credentials, standard port.
+        try:
+            assert_public_url(v)
+        except UnsafeURLError as exc:
+            raise ValueError(f"url blocked: {exc}") from exc
         return v
 
 
@@ -264,12 +270,17 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return list(self._tools)
 
-    def describe(self) -> str:
+    def describe(self, allowed: list[str] | None = None) -> str:
+        """Describe tools, optionally restricted to the plan's allowlist."""
+        if allowed is None:
+            chosen = list(self._tools)
+        else:
+            chosen = [t for t in allowed if t in self._tools]
         lines = []
-        for t in self._tools.values():
+        for t in chosen:
             fields = ", ".join(
-                f"{n}" for n in t.args_model.model_fields)
-            lines.append(f"- {t.name}({fields}): {t.description}")
+                f"{n}" for n in self._tools[t].args_model.model_fields)
+            lines.append(f"- {t}({fields}): {self._tools[t].description}")
         return "\n".join(lines)
 
 
