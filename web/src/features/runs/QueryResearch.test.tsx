@@ -76,7 +76,20 @@ describe("QueryResearchForm", () => {
     expect(vi.mocked(api.startRun)).not.toHaveBeenCalled();
   });
 
-  it("sends the query payload with fresh search and options", async () => {
+  it("shows a directly visible time range with Month selected by default", () => {
+    renderForm();
+    expect(screen.getByRole("group", { name: /Time range/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Month" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+    expect(screen.getByRole("button", { name: "Week" })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    );
+  });
+
+  it("sends the query payload with the selected time range and fresh search", async () => {
     const user = userEvent.setup();
     vi.mocked(api.startRun).mockResolvedValue({ run_id: "run_x" } as never);
     renderForm();
@@ -84,17 +97,13 @@ describe("QueryResearchForm", () => {
       screen.getByPlaceholderText("What would you like to research?"),
       "semiconductor stocks"
     );
-    // Open advanced settings and change max results.
-    await user.click(screen.getByRole("button", { name: /Advanced settings/i }));
-    const maxInput = screen.getByLabelText(/Maximum results/i);
-    await user.clear(maxInput);
-    await user.type(maxInput, "10");
+    // Time range is directly visible — no advanced panel to open.
+    await user.click(screen.getByRole("button", { name: "Week" }));
     await user.click(screen.getByRole("button", { name: /Start research/i }));
     await waitFor(() =>
       expect(vi.mocked(api.startRun)).toHaveBeenCalledWith({
         query: "semiconductor stocks",
-        max_results: 10,
-        time_range: "month",
+        time_range: "week",
         fresh_search: true,
       })
     );
@@ -183,6 +192,7 @@ describe("QueryResearchForm", () => {
       screen.getByPlaceholderText("What would you like to research?"),
       "something"
     );
+    await user.click(screen.getByRole("button", { name: "Week" }));
     await user.click(screen.getByRole("button", { name: /Clear/i }));
     const box = screen.getByPlaceholderText(
       "What would you like to research?"
@@ -190,6 +200,10 @@ describe("QueryResearchForm", () => {
     expect(box.value).toBe("");
     expect(screen.getByRole("switch", { name: /Fresh search/i })).toHaveAttribute(
       "aria-checked",
+      "true"
+    );
+    expect(screen.getByRole("button", { name: "Month" })).toHaveAttribute(
+      "aria-pressed",
       "true"
     );
   });
@@ -217,7 +231,7 @@ function queryRun(overrides: Partial<ResearchRun> = {}): ResearchRun {
     error: null,
     report_id: null,
     companies: [],
-    request: { query: "semiconductor stocks", fresh_search: true },
+    request: { query: "semiconductor stocks", fresh_search: true, time_range: "week" },
     ...overrides,
   };
 }
@@ -229,12 +243,14 @@ describe("QueryRunProgressCard", () => {
         <QueryRunProgressCard run={queryRun()} />
       </MemoryRouter>
     );
-    expect(screen.getByText("Query research")).toBeInTheDocument();
+    expect(screen.getByText("Research progress")).toBeInTheDocument();
     expect(screen.getByText("semiconductor stocks")).toBeInTheDocument();
     expect(screen.getByText("Searching the web")).toBeInTheDocument();
     expect(screen.getByText("Extracting articles")).toBeInTheDocument();
     expect(screen.getByText(/12 collected/)).toBeInTheDocument();
     expect(screen.getByText(/8 extracted/)).toBeInTheDocument();
+    // Run configuration reflects the selected time range.
+    expect(screen.getByText("Past week")).toBeInTheDocument();
   });
 
   it("shows the completed report link and stage", () => {

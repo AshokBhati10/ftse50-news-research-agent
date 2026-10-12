@@ -53,6 +53,11 @@ export function useRunLive(runId: string | undefined) {
     if (!runId) return;
     let cancelled = false;
     let cleanup: (() => void) | null = null;
+    // Clear any previously-shown run so navigating between runs never briefly
+    // renders another run's state under the new run's heading.
+    setRun(null);
+    setError(null);
+    setStreaming(false);
 
     const stopPolling = () => {
       if (poller.current) {
@@ -262,6 +267,13 @@ function Info({
 
 const QUERY_STAGE_ORDER = ["search", "extract", "deduplicate", "analyze", "report"];
 
+const TIME_RANGE_LABELS: Record<string, string> = {
+  day: "Past day",
+  week: "Past week",
+  month: "Past month",
+  year: "Past year",
+};
+
 export function QueryRunProgressCard({ run }: { run: ResearchRun }) {
   const active = !isTerminal(run.status);
   const stats = run.stats as Record<string, Record<string, unknown> | unknown>;
@@ -286,7 +298,7 @@ export function QueryRunProgressCard({ run }: { run: ResearchRun }) {
   return (
     <Card>
       <CardHeader
-        title="Query research"
+        title="Research progress"
         subtitle={run.query ?? ""}
         action={<RunStatusBadge status={run.status} />}
       />
@@ -336,7 +348,7 @@ export function QueryRunProgressCard({ run }: { run: ResearchRun }) {
           })}
         </ol>
 
-        <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+        <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
           <Info label="Findings" value={String(run.articles_found)} />
           <Info
             label="Finished"
@@ -356,6 +368,10 @@ export function QueryRunProgressCard({ run }: { run: ResearchRun }) {
                 "—"
               )
             }
+          />
+          <Info
+            label="Time range"
+            value={TIME_RANGE_LABELS[String(run.request?.time_range ?? "")] ?? "—"}
           />
           <Info
             label="Fresh search"

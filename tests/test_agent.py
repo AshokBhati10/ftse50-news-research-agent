@@ -110,7 +110,7 @@ def test_planner_sanitizes_llm_plan(monkeypatch):
     object.__setattr__(wild, "max_tool_calls", 99)
     monkeypatch.setattr(planner, "_llm", lambda: _FakePlannerLLM(wild))
     import asyncio
-    plan = asyncio.get_event_loop().run_until_complete(planner.plan("news"))
+    plan = asyncio.run(planner.plan("news"))
     assert plan.tools_allowed == ["web_search", "fetch_article"]  # shell removed
     assert len(plan.search_queries) <= 5
     assert plan.max_tool_calls == settings.max_tool_calls  # clamped
@@ -130,7 +130,7 @@ def test_planner_summarization_plan_always_gets_fetch_article(monkeypatch):
     )
     monkeypatch.setattr(planner, "_llm", lambda: _FakePlannerLLM(weak))
     import asyncio
-    plan = asyncio.get_event_loop().run_until_complete(
+    plan = asyncio.run(
         planner.plan("Summarize this article: https://example.com/a"))
     assert plan.tools_allowed == ["fetch_article"]
     assert plan.search_queries == []
@@ -148,8 +148,7 @@ def test_planner_falls_back_when_llm_down(monkeypatch):
     p = QueryPlanner(settings, run_id="t2")
     monkeypatch.setattr(p, "_llm", lambda: _Boom())
     import asyncio
-    plan = asyncio.get_event_loop().run_until_complete(
-        p.plan("Who is the CEO of HSBC?"))
+    plan = asyncio.run(p.plan("Who is the CEO of HSBC?"))
     assert plan.task_type == TaskType.FACTUAL_LOOKUP  # heuristic fallback
 
 

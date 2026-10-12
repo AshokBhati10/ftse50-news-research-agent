@@ -170,26 +170,6 @@ export function SelectInput(props: React.SelectHTMLAttributes<HTMLSelectElement>
   return <select {...props} className={cn(inputBase, props.className)} />;
 }
 
-export function Checkbox({
-  label,
-  hint,
-  ...rest
-}: React.InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: string }) {
-  return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-md border border-terminal-border bg-terminal-bg px-3 py-2.5 hover:border-indigo-400/50">
-      <input
-        type="checkbox"
-        className="mt-0.5 h-4 w-4 rounded border-terminal-border bg-terminal-surface accent-indigo-500"
-        {...rest}
-      />
-      <span>
-        <span className="block text-sm font-medium text-terminal-text">{label}</span>
-        {hint && <span className="mt-0.5 block text-xs text-terminal-faint">{hint}</span>}
-      </span>
-    </label>
-  );
-}
-
 export function Toggle({
   label,
   hint,
@@ -366,36 +346,6 @@ export function Dialog({
         <div className="px-5 py-4">{children}</div>
       </div>
     </div>
-  );
-}
-
-/* ----------------------------------- Stat ---------------------------------- */
-
-export function Stat({
-  label,
-  value,
-  sub,
-  icon,
-  tone = "neutral",
-}: {
-  label: string;
-  value: React.ReactNode;
-  sub?: string;
-  icon?: React.ReactNode;
-  tone?: BadgeTone;
-}) {
-  return (
-    <Card className="p-5">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-medium uppercase tracking-wide text-terminal-muted">
-          {label}
-        </p>
-        {icon && <span className={cn("text-terminal-faint")}>{icon}</span>}
-      </div>
-      <p className="mt-2 text-2xl font-semibold tabular-nums text-white">{value}</p>
-      {sub && <p className="mt-1 text-xs text-terminal-faint">{sub}</p>}
-      <span className="hidden">{tone}</span>
-    </Card>
   );
 }
 

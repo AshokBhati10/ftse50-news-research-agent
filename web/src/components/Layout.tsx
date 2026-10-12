@@ -6,13 +6,12 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import {
   Activity,
-  Building2,
   FileText,
-  LayoutDashboard,
   LineChart,
   PlayCircle,
   RefreshCw,
   Settings as SettingsIcon,
+  Telescope,
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { HealthResponse, ResearchRun } from "../types";
@@ -20,11 +19,10 @@ import { timeAgo } from "../lib/format";
 import { cn } from "../lib/cn";
 
 const NAV = [
-  { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
-  { to: "/runs", label: "Research Runs", icon: PlayCircle },
-  { to: "/reports", label: "Reports", icon: FileText },
-  { to: "/companies", label: "Companies", icon: Building2 },
-  { to: "/settings", label: "Settings", icon: SettingsIcon },
+  { to: "/runs", label: "Research Runs", icon: PlayCircle, end: false },
+  { to: "/deep-research", label: "Deep Research", icon: Telescope, end: false },
+  { to: "/reports", label: "Reports", icon: FileText, end: false },
+  { to: "/settings", label: "Settings", icon: SettingsIcon, end: false },
 ];
 
 function useBackendStatus(refreshKey: number) {
@@ -61,10 +59,8 @@ function useBackendStatus(refreshKey: number) {
 }
 
 const TITLES: Record<string, string> = {
-  "/": "Overview",
   "/runs": "Research Runs",
   "/reports": "Research Reports",
-  "/companies": "Companies",
   "/settings": "Settings",
 };
 
@@ -83,14 +79,14 @@ export default function Layout() {
   }, []);
 
   const base = location.pathname.split("/").slice(0, 2).join("/") || "/";
-  const title = TITLES[base] ?? TITLES[location.pathname] ?? "FTSE 50";
+  const title = TITLES[base] ?? TITLES[location.pathname] ?? "News Research Agent";
 
   const connected = !error && health?.status === "ok";
   const llmOk = health?.ollama.ok ?? false;
 
   const sidebar = (
     <div className="flex h-full flex-col">
-      <Link to="/" className="flex items-center gap-2.5 px-5 pb-6 pt-6">
+      <Link to="/runs" className="flex items-center gap-2.5 px-5 pb-6 pt-6">
         <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500/15 text-indigo-300">
           <LineChart className="h-5 w-5" />
         </span>

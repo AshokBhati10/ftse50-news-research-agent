@@ -14,6 +14,7 @@ Tiers (higher is better):
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 
 # ---------------------------------------------------------------------------
@@ -150,6 +151,20 @@ def score_source(url: str) -> tuple[float, str, str]:
         return 0.15, "low", f"{domain}: low-quality/spam indicators"
 
     return 0.4, "other", f"{domain}: unrecognised source"
+
+
+# Section/hub pages ("press releases", "annual reports", ...) are navigation,
+# not developments. They are legitimate but rarely answer a specific question.
+_SECTION_PAGE_RE = re.compile(
+    r"\b(press releases?|annual reports?|media cent(?:re|er)|newsroom|"
+    r"investor relations|publications|news & events|events calendar)\b",
+    re.I,
+)
+
+
+def is_section_page(title: str, text: str = "") -> bool:
+    """Heuristic: does this title/text describe a section/index page?"""
+    return bool(_SECTION_PAGE_RE.search(f"{title or ''} {text or ''}"))
 
 
 def rank_by_source_quality(articles: list) -> list:

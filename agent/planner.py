@@ -14,6 +14,7 @@ import re
 
 from config.settings import Settings
 from utils.models import PERMITTED_TOOLS, ResearchPlan, TaskType
+from utils.story_dedup import is_near_duplicate_title, significant_tokens
 
 from .llm_client import LLMClient, LLMError
 
@@ -54,9 +55,22 @@ task-specific research plan as structured output. Choose exactly one task type:
   directly; do NOT run broad web searches.
 - general: anything else — targeted research with a concise synthesized answer.
 
-Keep search_queries short (<=5) and specific. For factual lookups prefer 1-2
-queries aimed at authoritative sources. Set detailed=true only when the user
-explicitly asks for detailed/multiple/ranked/comprehensive research.
+Keep search_queries short (<=5) and specific. Produce 3-5 mutually DISTINCT
+queries that cover different relevant aspects of the question, rather than
+near-identical rewordings of one query. For recent business/financial research
+consider, where relevant to the question: announcements, investments and
+acquisitions, financial results and guidance, and material operational
+developments. Never repeat the same wording twice.
+
+Respect constraints in the question: if a time window is stated (e.g. "past
+month", "last week"), prefer queries that surface results in that window. If
+the question names a market universe (e.g. FTSE, a specific index, London-
+listed), target that universe explicitly and do NOT broaden into unrelated
+global or US-company rankings.
+
+For factual lookups prefer 1-2 queries aimed at authoritative sources. Set
+detailed=true only when the user explicitly asks for
+detailed/multiple/ranked/comprehensive research.
 
 Available tools for tools_allowed (choose only from these):
 - web_search: web search returning ranked results with title, url, snippet.
@@ -96,6 +110,52 @@ def classify_task_type(query: str) -> TaskType:
     return TaskType.GENERAL
 
 
+# Generic, task-agnostic aspect suffixes used only to top up a thin
+# news-research query set. They contain no company/topic specifics.
+_NEWS_ASPECTS = (
+    "announcement",
+    "acquisition investment",
+    "financial results guidance",
+    "operational update",
+)
+
+
+def _condense_subject(query: str, limit: int = 6) -> str:
+    """Condense a question into a short subject for aspect queries."""
+    tokens = significant_tokens(query)
+    return " ".join(tokens[:limit]) or query.strip()[:60]
+
+
+def diversify_queries(queries: list[str], raw_query: str, task_type: TaskType,
+                      *, limit: int = 5) -> list[str]:
+    """Remove near-identical queries and ensure a news plan is aspect-diverse.
+
+    Deterministic and generic: it never invents company/topic-specific terms.
+    A news plan that arrives with only one query gets up to three aspect
+    variants derived from the question's own significant terms.
+    """
+    out: list[str] = []
+    for q in queries:
+        q = (q or "").strip()
+        if not q:
+            continue
+        # min_tokens=1: short queries must still collapse when near-identical.
+        if any(is_near_duplicate_title(q, kept, min_tokens=1) for kept in out):
+            continue
+        out.append(q)
+    if task_type == TaskType.NEWS_RESEARCH and len(out) < 3:
+        subject = _condense_subject(raw_query)
+        for aspect in _NEWS_ASPECTS:
+            if len(out) >= 3:
+                break
+            candidate = f"{subject} {aspect}".strip()
+            if any(is_near_duplicate_title(candidate, kept, min_tokens=1)
+                   for kept in out):
+                continue
+            out.append(candidate)
+    return out[:limit]
+
+
 def heuristic_plan(query: str, settings: Settings) -> ResearchPlan:
     """Deterministic fallback plan when the LLM planner is unavailable."""
     task_type = classify_task_type(query)
@@ -119,11 +179,11 @@ def heuristic_plan(query: str, settings: Settings) -> ResearchPlan:
         intent_summary=f"Research the user's question (heuristic plan).",
         needs_web_research=True,
         tools_allowed=["web_search", "fetch_article"],
-        search_queries=[q],
+        search_queries=diversify_queries([q], q, task_type),
         evidence_needed="Relevant, preferably authoritative sources answering the question.",
         expected_answer_format="Direct answer first, then supporting context and sources.",
         completion_criteria="Sufficient evidence to answer, or an honest unverified result.",
-        max_tool_calls=min(3, settings.max_tool_calls),
+        max_tool_calls=min(4, settings.max_tool_calls),
     )
 
 
@@ -173,6 +233,10 @@ class QueryPlanner:
         queries = [q for q in plan.search_queries if q][:5]
         if plan.needs_web_research and not queries and "web_search" in allowed:
             queries = [query]  # never plan a web search with no query
+        if plan.needs_web_research:
+            # Distinct aspect coverage; drops near-identical queries the model
+            # may emit and tops up a thin news plan deterministically.
+            queries = diversify_queries(queries, query, plan.task_type)
         if not plan.needs_web_research:
             allowed = [t for t in allowed if t != "web_search"]
             queries = []

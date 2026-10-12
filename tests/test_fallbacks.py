@@ -31,7 +31,7 @@ async def test_crawl_failure_falls_back_to_snippet(monkeypatch):
         raise RuntimeError("browser exploded")
 
     async def empty_fallback(url, settings):
-        return None
+        return None, {}
 
     monkeypatch.setattr(crawl_mod, "_crawl4ai_extract", boom_crawl)
     monkeypatch.setattr(crawl_mod, "_fallback_fetch", empty_fallback)
@@ -47,7 +47,7 @@ async def test_crawl_failure_uses_fallback_extractor(monkeypatch):
         raise RuntimeError("browser exploded")
 
     async def fake_fallback(url, settings):
-        return "Fallback extracted body text. " * 30
+        return "Fallback extracted body text. " * 30, {}
 
     monkeypatch.setattr(crawl_mod, "_crawl4ai_extract", boom_crawl)
     monkeypatch.setattr(crawl_mod, "_fallback_fetch", fake_fallback)
@@ -227,12 +227,12 @@ async def test_fallback_fetch_follows_public_redirect_only(monkeypatch):
 
     monkeypatch.setattr(crawl_mod.httpx, "AsyncClient", factory)
 
-    ok = await crawl_mod._fallback_fetch(
+    ok, _meta = await crawl_mod._fallback_fetch(
         "http://start.example.com/public-redirect", _settings())
     assert ok is not None
     assert "Enough readable body text" in ok
 
-    blocked = await crawl_mod._fallback_fetch(
+    blocked, _bmeta = await crawl_mod._fallback_fetch(
         "http://start.example.com/private-redirect", _settings())
     assert blocked is None
     assert not any(":9100" in u for u in seen)  # private hop never fetched

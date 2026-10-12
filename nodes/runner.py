@@ -216,8 +216,21 @@ async def _execute_agentic_query(
     )
     # Detailed mode: also produce ranked findings from the gathered evidence.
     if result.plan.detailed and result.evidence:
-        result.findings = await _findings_from_evidence(
-            query, result.evidence, settings, cache, max_results)
+        from utils.financial_validation import is_market_cap_question
+        if is_market_cap_question(query) and not result.answer.verified:
+            # Never present unrelated findings as a substitute for a ranking
+            # the evidence could not support.
+            result.findings = []
+            result.warnings.append(
+                "Ranked findings were withheld: a market-cap ranking could not "
+                "be verified from the retrieved evidence.")
+        else:
+            result.findings, dropped = await _findings_from_evidence(
+                query, result.evidence, settings, cache, max_results)
+            if dropped:
+                result.warnings.append(
+                    f"{dropped} finding(s) outside the requested universe/low "
+                    "relevance were excluded from the ranked list.")
     return build_answer_report(
         query=query, run_id=run_id, started_at=started_at,
         result=result, settings=settings,
@@ -226,9 +239,15 @@ async def _execute_agentic_query(
 
 async def _findings_from_evidence(query: str, evidence: list[dict],
                                   settings: Settings, cache: CacheManager,
-                                  max_results: int) -> list:
-    """Ranked findings for detailed mode, from agent-gathered evidence."""
+                                  max_results: int) -> tuple[list, int]:
+    """Ranked findings for detailed mode, from agent-gathered evidence.
+
+    Returns ``(findings, dropped_count)``. Findings are filtered so a scoped
+    question (e.g. FTSE) never lists off-universe or effectively-irrelevant
+    articles as if they answered it.
+    """
     from dateutil import parser as date_parser
+    from agent.verification import filter_findings_for_universe
     from nodes.analysis import analyze_query
     from utils.models import Article
 
@@ -256,12 +275,15 @@ async def _findings_from_evidence(query: str, evidence: list[dict],
             source_quality=float(e.get("source_quality", 0.0) or 0.0),
         ))
     if not articles:
-        return []
+        return [], 0
     try:
-        return await analyze_query(query, articles[:max_results], settings, cache)
+        findings = await analyze_query(query, articles[:max_results],
+                                       settings, cache)
     except Exception as exc:  # noqa: BLE001 — findings are optional
         log.warning("Detailed findings failed: %s", exc)
-        return []
+        return [], 0
+    filtered = filter_findings_for_universe(findings, query)
+    return filtered, len(findings) - len(filtered)
 
 
 async def _execute_simple_query(
@@ -320,6 +342,10 @@ async def _execute_simple_query(
     if extraction_failures:
         warnings.append(f"{extraction_failures} article(s) failed extraction "
                         "and were excluded.")
+    paywalled_count = sum(1 for a in extracted if a.extraction_status == "paywalled")
+    if paywalled_count:
+        warnings.append(f"{paywalled_count} article(s) were paywalled; search "
+                        "snippets were used where available.")
 
     # --- semantic dedup ----------------------------------------------------
     deduper = build_deduper(settings)

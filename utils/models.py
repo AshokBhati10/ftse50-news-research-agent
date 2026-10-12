@@ -42,7 +42,9 @@ class Article(BaseModel):
     snippet: str = ""
     content: str | None = None
     search_provider: str = ""  # searxng | you.com | yfinance | mock
-    extraction_status: Literal["pending", "ok", "snippet_only", "failed", "mock"] = "pending"
+    extraction_status: Literal[
+        "pending", "ok", "snippet_only", "paywalled", "failed", "mock"
+    ] = "pending"
     source_quality: float = 0.0
     source_quality_tier: str = ""
     evidence_excerpt: str = ""
@@ -135,6 +137,29 @@ class TaskType(str, Enum):
 
 
 PERMITTED_TOOLS = ("web_search", "fetch_article")
+
+# ---------------------------------------------------------------------------
+# Maximum-results contract (single source of truth)
+#
+# ``max_results`` is the maximum number of *distinct articles* (after URL and
+# story deduplication) that may be retained as a run's analysed evidence and
+# cited in its answer. It is a GLOBAL cap across the whole run — it is NOT a
+# per-search limit and NOT a cap on the number of search calls. Search breadth
+# is bounded separately by the plan's ``max_tool_calls`` and the per-query
+# search limit (``Settings.search_results_per_query``).
+# ---------------------------------------------------------------------------
+MIN_MAX_RESULTS = 1
+MAX_MAX_RESULTS = 50
+DEFAULT_MAX_RESULTS = 20
+
+
+def clamp_max_results(value: int | None) -> int:
+    """Normalize ``max_results`` into the supported range (never raises)."""
+    try:
+        n = int(value) if value is not None else DEFAULT_MAX_RESULTS
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_RESULTS
+    return min(MAX_MAX_RESULTS, max(MIN_MAX_RESULTS, n))
 
 
 class ResearchPlan(BaseModel):

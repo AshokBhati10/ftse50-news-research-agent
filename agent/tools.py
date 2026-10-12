@@ -27,6 +27,8 @@ from nodes.search import (
 from utils.cache import CacheManager
 from utils.models import Article, PERMITTED_TOOLS
 from utils.net_guard import UnsafeURLError, assert_public_url
+from utils.source_quality import is_section_page, rank_by_source_quality
+from utils.story_dedup import dedup_stories
 
 log = logging.getLogger(__name__)
 
@@ -104,28 +106,69 @@ def _overlap_ratio(query: str, title: str, snippet: str) -> float:
     return hits / len(terms)
 
 
+def _recency_bonus(a: Article) -> float:
+    """Prefer dated, recent results; undated items get no bonus."""
+    if a.published_at is None:
+        return 0.0
+    published = a.published_at
+    if published.tzinfo is None:
+        published = published.replace(tzinfo=timezone.utc)
+    age_days = (datetime.now(timezone.utc) - published).total_seconds() / 86400.0
+    if age_days <= 2:
+        return 0.20
+    if age_days <= 14:
+        return 0.12
+    if age_days <= 45:
+        return 0.06
+    return 0.0
+
+
+def _search_score(a: Article, query: str) -> float:
+    """Relevance + reliability + recency, with hub/homepage penalties.
+
+    - source quality (deterministic domain tiers)
+    - query-term overlap (title + snippet)
+    - recency bonus for dated items (news relevance)
+    - full-text bonus when content was extracted
+    - penalties for homepages and undated section/index pages
+    """
+    score = a.source_quality
+    score += 0.5 * _overlap_ratio(query, a.title, a.snippet)
+    score += _recency_bonus(a)
+    if (a.content or "").strip():
+        score += 0.10
+    if _is_homepage(a.url):
+        score -= 0.40
+    if a.published_at is None and is_section_page(a.title, a.snippet):
+        score -= 0.30
+    return score
+
+
 def filter_and_rank(articles: list[Article], query: str,
                     max_results: int) -> list[Article]:
-    """Drop unusable results; rank the rest by quality + query relevance.
+    """Drop unusable results; de-duplicate stories; rank by quality+relevance.
 
     - Drops: empty titles, or no snippet and no extracted content.
-    - Deprioritizes (not silently drops): homepage/category URLs, which rarely
-      answer specific questions.
-    - Score: source quality + query-term overlap, minus homepage penalty.
+    - Collapses near-duplicate/syndicated headlines so one story does not fill
+      the result set (the highest-ranked copy survives).
+    - Deprioritizes (not silently drops): homepage/category URLs and undated
+      section pages, which rarely answer specific questions.
     """
+    if max_results <= 0:
+        return []
     usable = [a for a in articles
               if a.title.strip() and (a.snippet.strip() or (a.content or "").strip())]
     dropped = len(articles) - len(usable)
     if dropped:
         log.info("filter_and_rank: dropped %d unusable results", dropped)
 
-    def _score(a: Article) -> float:
-        return (a.source_quality
-                + 0.5 * _overlap_ratio(query, a.title, a.snippet)
-                - (0.4 if _is_homepage(a.url) else 0.0))
-
-    usable.sort(key=_score, reverse=True)
-    return usable[:max_results]
+    usable.sort(key=lambda a: _search_score(a, query), reverse=True)
+    distinct = dedup_stories(
+        usable, title_getter=lambda a: a.title, threshold=0.8)
+    if len(distinct) < len(usable):
+        log.info("filter_and_rank: collapsed %d near-duplicate story result(s)",
+                 len(usable) - len(distinct))
+    return distinct[:max_results]
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +214,9 @@ class SearchTool:
                 notes.append(f"You.com fallback failed: {exc}")
                 log.warning("web_search: %s", exc)
         articles = dedup_by_url(articles)
+        # Score domains before ranking so the source-quality term is real
+        # (searchers don't populate source_quality themselves).
+        rank_by_source_quality(articles)
         articles = filter_and_rank(articles, args.query, args.max_results)
         result = {
             "ok": bool(articles),
@@ -214,13 +260,19 @@ class ArticleExtractor:
             return {"ok": False, "url": args.url,
                     "error": f"Extraction failed: {exc}"}
         text = (article.content or "").strip()
+        status = article.extraction_status
+        error = None
+        if status == "paywalled":
+            error = "Article appears paywalled; no full text available."
+        ok = status in ("ok", "snippet_only") and bool(text)
         return {
-            "ok": article.extraction_status in ("ok", "snippet_only") and bool(text),
+            "ok": ok,
             "url": args.url,
+            "error": error,
             "title": article.title or "",
             "published_at": (article.published_at.isoformat()
                              if article.published_at else None),
-            "extraction_status": article.extraction_status,
+            "extraction_status": status,
             "content": text[:8000],
             "source": article.source or urlparse(args.url).netloc,
         }

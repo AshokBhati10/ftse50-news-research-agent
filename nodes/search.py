@@ -29,6 +29,7 @@ from utils import query_builder
 from utils.cache import CacheManager
 from utils.models import Article, Company
 from utils.rate_limiter import AsyncRateLimiter, retry_async
+from utils.story_dedup import headline_tokens, is_near_duplicate_title
 
 log = logging.getLogger(__name__)
 
@@ -376,19 +377,56 @@ def normalize_query(query: str) -> str:
     return _re.sub(r"\s+", " ", query.strip().lower())
 
 
-def build_topic_queries(query: str, limit: int = 3) -> list[str]:
-    """Small deterministic query expansion for a user topic.
+# Generic, task-agnostic aspect suffixes (no company/topic specifics) used to
+# widen search coverage when the first query is thin.
+_TOPIC_ASPECTS = (
+    "latest news",
+    "announcement",
+    "acquisition investment",
+    "financial results guidance",
+    "operational update",
+)
 
-    The raw query always goes first; at most ``limit`` variants are produced.
-    No LLM call — cheap, explainable, and bounded.
+
+# A candidate variant is only dropped when it carries no *new* significant
+# token versus an existing query (e.g. appending "latest news" to a query that
+# already reduces to the same terms). The high threshold keeps single-aspect
+# additions to long queries, which still widen coverage.
+_VARIANT_DUP_THRESHOLD = 0.95
+
+
+def build_topic_queries(query: str, limit: int = 3) -> list[str]:
+    """Small deterministic, aspect-aware query expansion for a user topic.
+
+    The raw query always comes first, followed by up to ``limit - 1`` variants
+    that cover *distinct* relevant aspects — so at most ``limit`` queries in
+    total. Variants carrying no new significant terms are dropped, and no
+    company/topic-specific terms are invented. No LLM call — cheap,
+    explainable and bounded.
     """
     q = query.strip()
-    lowered = q.lower()
+    if not q or limit <= 0:
+        return []
+
     variants = [q]
-    if "latest" not in lowered and "recent" not in lowered:
-        variants.append(f"{q} latest news")
-    if "news" not in lowered:
-        variants.append(f"{q} news developments")
+    seen_tokens: set[str] = set(headline_tokens(q))
+    for aspect in _TOPIC_ASPECTS:
+        if len(variants) >= limit:
+            break
+        candidate = f"{q} {aspect}"
+        cand_tokens = headline_tokens(candidate)
+        # Require at least one *new* significant term (handles queries whose
+        # token set is empty, e.g. "latest news") ...
+        if not (cand_tokens - seen_tokens):
+            continue
+        # ... and reject candidates that are still near-identical to an
+        # existing variant (e.g. one extra word on a very long query).
+        if any(is_near_duplicate_title(candidate, seen, _VARIANT_DUP_THRESHOLD,
+                                       min_tokens=1)
+               for seen in variants):
+            continue
+        variants.append(candidate)
+        seen_tokens |= cand_tokens
     return variants[:limit]
 
 
@@ -446,6 +484,9 @@ async def search_topic(
 
     min_useful = settings.min_useful_search_results
     queries = build_topic_queries(query)
+    # Per-query retrieval is its own limit; ``max_results`` is the run's global
+    # analysis cap and must not shrink how many candidates each search returns.
+    per_query = max(1, min(10, settings.search_results_per_query))
     articles: list[Article] = []
     providers: list[str] = []
     fallback_used = False
@@ -454,7 +495,7 @@ async def search_topic(
 
     for i, q in enumerate(queries):
         try:
-            found = await searxng_search(q, settings, max_results=max_results,
+            found = await searxng_search(q, settings, max_results=per_query,
                                          time_range=time_range)
             queries_used.append(q)
             before = len(articles)
@@ -472,7 +513,7 @@ async def search_topic(
     if len(articles) < min_useful:
         if settings.you_api_key:
             try:
-                fb = await youcom_search(query, settings, max_results=max_results)
+                fb = await youcom_search(query, settings, max_results=per_query)
                 articles = dedup_by_url(articles + fb)
                 providers.append("you.com")
                 fallback_used = True

@@ -1,0 +1,158 @@
+name: research
+
+services:
+  searxng:
+    image: docker.io/searxng/searxng:latest   # pin a dated tag in production, e.g. 2026.x.y-<hash>
+    container_name: research-searxng
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET}        # overrides server.secret_key
+      SEARXNG_BASE_URL: "http://localhost:8081/"
+      SEARXNG_LIMITER: ${SEARXNG_LIMITER:-false}  # overrides server.limiter (private instance: keep false)
+    volumes:
+      - ./searxng/:/etc/searxng/:Z             # settings.yml (+ limiter.toml)
+      - searxng-data:/var/cache/searxng/
+    ports:
+      - "127.0.0.1:8081:8080"                  # UI for debugging, reachable only from this machine
+    depends_on:
+      valkey:
+        condition: service_healthy
+    networks: [backend]
+
+  valkey:
+    image: docker.io/valkey/valkey:9-alpine
+    container_name: valkey
+    restart: unless-stopped
+    # volatile-lru: when memory is full, evict only keys that have a TTL (all our cache keys do)
+    command: valkey-server --save 30 1 --loglevel warning --maxmemory 1gb --maxmemory-policy volatile-lru
+    volumes:
+      - valkey-data:/data/
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [backend]                        # no published port
+
+  qdrant:
+    image: docker.io/qdrant/qdrant:latest      # pin a version in production
+    container_name: qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant-data:/qdrant/storage
+    ports:
+      - "127.0.0.1:6333:6333"                  # dashboard at http://localhost:6333/dashboard
+    networks: [backend]
+
+  ollama:
+    image: docker.io/ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    environment:
+      # Ollama's default context is 4096 tokens and it silently truncates longer prompts (cutting off the
+      # system prompt + first sources). Synthesis sends up to TOP_K_PASSAGES x 1800 chars, so raise it.
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-8192}
+    volumes:
+      - ollama-data:/root/.ollama
+    networks: [backend]
+
+  rabbitmq:
+    # The -alpine tag ships WITHOUT the management plugin, so there is no management UI to expose.
+    image: docker.io/library/rabbitmq:4-alpine
+    container_name: research-rabbitmq
+    restart: unless-stopped
+    env_file: .env.rabbitmq                    # RABBITMQ_DEFAULT_USER / _PASS; create with tools/init_rabbitmq_secret.sh
+    volumes:
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/20-research.conf:ro
+      - rabbitmq-data:/var/lib/rabbitmq        # queues + users survive restarts
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+    networks: [backend]                        # no published port: reachable only from other containers
+
+  app:
+    # API only: validates requests, enqueues jobs, serves status/results. No ML models are loaded here.
+    build: ./app
+    container_name: research-app
+    restart: unless-stopped
+    env_file: .env.rabbitmq
+    environment: &research-env
+      SEARXNG_URL: http://searxng:8080
+      VALKEY_URL: redis://valkey:6379/1        # DB 1 = app cache; DB 0 = SearXNG; DB 2 = Celery results
+      CELERY_RESULT_BACKEND: redis://valkey:6379/2
+      RABBITMQ_HOST: rabbitmq
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-research_chunks}
+      LLM_BASE_URL: http://ollama:11434/v1
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:14b-instruct}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-300}           # seconds per LLM call; raise on slow CPU-only machines
+      MAX_ROUNDS: ${MAX_ROUNDS:-3}
+      MAX_TOTAL_QUERIES: ${MAX_TOTAL_QUERIES:-10}
+      TOP_K_PASSAGES: ${TOP_K_PASSAGES:-14}
+      EMBED_MODEL: ${EMBED_MODEL:-BAAI/bge-m3}
+      RERANK_MODEL: ${RERANK_MODEL:-BAAI/bge-reranker-v2-m3}
+      MODEL_DEVICE: ${MODEL_DEVICE:-cpu}
+      JOB_MAX_RETRIES: ${JOB_MAX_RETRIES:-2}
+      JOB_SOFT_TIME_LIMIT: ${JOB_SOFT_TIME_LIMIT:-2400}
+      JOB_TIME_LIMIT: ${JOB_TIME_LIMIT:-2700}
+      FETCH_USER_AGENT: "Mozilla/5.0 (compatible; Yantra3lokaResearchBot/0.1; +mailto:dev@example.com)"
+    ports:
+      - "127.0.0.1:8001:8000"                  # Uvicorn listens on 8000 (see app/Dockerfile)
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+      searxng: {condition: service_started}
+    networks: [backend]
+
+  worker:
+    # Executes research jobs. Each worker process holds the embedder + reranker (~4-5 GB RAM on CPU), so
+    # concurrency defaults to 1 on this 4-CPU / 16 GB box that also runs Ollama; raise WORKER_CONCURRENCY only
+    # if you add memory (each extra process loads its own copy of the models).
+    build: ./app
+    container_name: research-worker
+    restart: unless-stopped
+    env_file: .env.rabbitmq
+    environment: *research-env
+    command: >
+      celery -A research_agent.jobs worker -Q research -n research@%h
+      --concurrency=${WORKER_CONCURRENCY:-1} --loglevel=INFO --without-gossip --without-mingle
+    volumes:
+      - hf-models:/models                      # bge-m3 + reranker weights are downloaded once
+    shm_size: "1gb"                            # headless Chromium needs shared memory
+    mem_limit: ${WORKER_MEM_LIMIT:-8g}
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A research_agent.jobs inspect ping -d research@$$HOSTNAME -t 5 | grep -q pong"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+      valkey: {condition: service_healthy}
+      qdrant: {condition: service_started}
+      searxng: {condition: service_started}
+      ollama: {condition: service_started}
+    networks: [backend]
+
+  # Optional: start with  docker compose --profile tor up -d
+  tor:
+    build: ./tor
+    container_name: tor
+    restart: unless-stopped
+    profiles: ["tor"]
+    networks: [backend]
+
+networks:
+  backend: {}
+
+volumes:
+  searxng-data:
+  valkey-data:
+  qdrant-data:
+  ollama-data:
+  hf-models:
+  rabbitmq-data:

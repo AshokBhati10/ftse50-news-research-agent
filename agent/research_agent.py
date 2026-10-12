@@ -22,11 +22,19 @@ from utils.models import (
     SourceRecord,
     TaskType,
     ToolTraceEntry,
+    clamp_max_results,
+)
+from utils.query_scope import requested_universe
+from .evidence import (
+    evidence_from_fetch,
+    evidence_from_search,
+    select_evidence,
 )
 from .llm_client import LLMClient, LLMError
 from .planner import BASE_SYSTEM_PROMPT, QueryPlanner
 from .tools import ToolExecutor, ToolRegistry, ToolValidationError, filter_and_rank
 from .tools import SearchTool as _SearchTool  # noqa: F401 (re-export for tests)
+from .verification import verify_answer
 
 log = logging.getLogger(__name__)
 
@@ -40,9 +48,19 @@ Reply with structured output:
 - action "finish" when the evidence is sufficient to answer, or when further
   calls are unlikely to help.
 
-Rules: only request tools from the list above; never repeat an identical call;
-prefer fetching a promising article over another broad search; stop early when
-the completion criteria are met.
+Rules:
+- Only request tools from the list above; never repeat an identical call.
+- Cover the question from different angles: for recent developments, seek
+  distinct aspects (announcements, investments/acquisitions, financial results
+  and guidance, material operational changes) rather than re-running the same
+  search. Each new query must be meaningfully different from the last.
+- If the evidence found so far is thin or only covers one aspect, prefer
+  another targeted search over finishing; absence of a result from a single
+  search is NOT proof that no such result exists.
+- Prefer fetching a promising article over yet another broad search when you
+  already have candidates.
+- Stop early only when the completion criteria are met or further calls are
+  unlikely to help.
 """
 
 
@@ -63,9 +81,12 @@ You synthesize research evidence into a direct answer. Output structured data:
   sentences of essential context. Do NOT use Markdown formatting markers
   (**bold**, # headings) and do NOT put a numbered list in this field — the
   reader sees it as plain text. Keep it to one or two short paragraphs.
-- key_points: the supporting findings, one fact per item, each traceable to a
-  source. Put the detail here as separate short sentences and do not repeat the
-  answer verbatim.
+- key_points: the supporting findings, one development per item, each
+  traceable to a source. Make each item self-contained and concise: state the
+  development, its business/financial impact, and the publication or event date
+  where the evidence provides one (write "undated" when it does not). Do not
+  paste URLs here — citations are attached automatically from `sources` — and do
+  not repeat the answer verbatim.
 - sources: only sources you actually used, each with supporting_excerpt and
   supports_claims (indices into key_points the source supports).
 - confidence: 0.0-1.0 reflecting evidence strength.
@@ -79,6 +100,28 @@ Evidence type matters: a "search snippet" is a short excerpt — only use it for
 the fact it directly states. A "full article" carries the complete text. When a
 date is relative ("5 days ago"), describe it as approximate; never convert a
 relative timestamp into a specific calendar date.
+
+Consistency and honesty rules (they override any urge to sound complete):
+- Respect any explicit count the user asked for (e.g. "no more than 2
+  results"). Never present more distinct results/sources than requested.
+- Count *distinct developments*, not sources: several outlets describing the
+  same transaction are ONE development. Do not list a milestone of an earlier
+  deal as a separate development.
+- If fewer distinct results are supported than requested, state that plainly
+  and explain the evidence limitation. Say only that no further development
+  could be *confirmed from the retrieved evidence* — never assert that no
+  other development exists, because search coverage may be incomplete.
+- If the question is scoped to a market universe (e.g. FTSE), use only evidence
+  about that universe; ignore unrelated global/US rankings that do not answer
+  the question.
+- For market-cap or other financial rankings: present a value only when the
+  evidence states the metric, the currency/unit and the as-of date, and the
+  values are comparable. If any of these are missing, do not rank — give a
+  partial result and say which evidence is missing. Never invent a unit, date
+  or figure, and never describe a source as providing a verified ranking when
+  the pipeline could not verify it.
+- A source being relevant does not make its claim verified. Keep facts and
+  interpretation distinct.
 """,
             output_type=QueryAnswer,
             run_id=self.run_id,
@@ -121,7 +164,10 @@ class ResponseParser:
     """Validates and normalizes the analyzer's structured output."""
 
     @staticmethod
-    def validate(answer: QueryAnswer, evidence_urls: set[str]) -> QueryAnswer:
+    def validate(answer: QueryAnswer, evidence_urls: set[str], *,
+                 query: str = "", plan: ResearchPlan | None = None,
+                 evidence: list[dict] | None = None,
+                 max_results: int | None = None) -> QueryAnswer:
         """Enforce answer/source integrity; degrade honestly on violations."""
         # Sources must come from retrieved evidence — never fabricated.
         kept: list[SourceRecord] = []
@@ -146,6 +192,13 @@ class ResponseParser:
             answer.confidence = min(answer.confidence, 0.4)
             answer.limitations.append(
                 "Some claims could not be matched to retrieved sources.")
+        # Evidence-consistency checks (market-cap units/dates, requested
+        # universe, figures absent from the evidence). Only runs when the
+        # caller supplies the evidence context.
+        if evidence is not None and query:
+            for lim in verify_answer(answer, query=query, evidence=evidence,
+                                     max_results=max_results, plan=plan):
+                log.info("ResponseParser: %s", lim)
         return answer
 
 
@@ -196,11 +249,26 @@ class ResearchAgent:
         query = query.strip()
         if not query:
             raise ValueError("Query must not be empty")
+        # Global analysis cap: max distinct articles retained for this run.
+        # (Not a per-search limit — see the Maximum-results contract in
+        # utils/models.py.)
+        requested_max = max_results
+        max_results = clamp_max_results(max_results)
+        if max_results != requested_max:
+            log.warning("[%s] max_results=%r out of range; normalized to %d",
+                        self.run_id, requested_max, max_results)
+        # Per-search retrieval is governed by its own limit, independent of the
+        # global analysis cap, so a small cap can still discover several
+        # candidates to choose from.
+        per_search = max(1, min(10, self.settings.search_results_per_query))
         started = datetime.now(timezone.utc)
         warnings: list[str] = []
         tool_trace: list[ToolTraceEntry] = []
+        # Candidate pool: everything retrieved this run (URL-deduped), bounded
+        # only by the tool budget. The global cap is applied by select_evidence.
+        candidates: list[dict] = []
+        candidate_urls: set[str] = set()
         evidence: list[dict] = []
-        evidence_urls: set[str] = set()
 
         def _emit(stage: str, info: dict) -> None:
             if on_stage:
@@ -240,11 +308,13 @@ class ResearchAgent:
             return obs
 
         def _ingest(ev_list: list[dict]) -> None:
+            from nodes.search import normalize_url
             for e in ev_list:
                 url = e.get("url", "")
-                if url and url not in evidence_urls:
-                    evidence_urls.add(url)
-                    evidence.append(e)
+                key = normalize_url(url) if url else ""
+                if key and key not in candidate_urls:
+                    candidate_urls.add(key)
+                    candidates.append(e)
 
         # --- direct fetch for summarization tasks (no broad search) -----
         url_m = _URL_RE.search(query)
@@ -253,22 +323,22 @@ class ResearchAgent:
                 and calls < plan.max_tool_calls):
             url = url_m.group(0).rstrip(").,")
             obs = await _call("fetch_article", {"url": url})
-            if obs.get("ok"):
+            if obs.get("ok") and (obs.get("content") or "").strip():
                 _ingest([self._evidence_from_fetch(obs)])
 
         # --- planned searches -------------------------------------------
+        # Run every planned query (bounded by the tool budget): search breadth
+        # discovers distinct developments, and the global cap is applied later.
         if "web_search" in plan.tools_allowed:
             for q in plan.search_queries:
                 if calls >= plan.max_tool_calls:
                     break
                 obs = await _call("web_search", {
-                    "query": q, "max_results": min(10, max_results),
+                    "query": q, "max_results": per_search,
                     "time_range": time_range})
                 if obs.get("notes"):
                     warnings.extend(obs["notes"])
                 _ingest([self._evidence_from_search(r) for r in obs.get("results", [])])
-                if calls >= 2 and len(evidence) >= max_results:
-                    break  # enough material; save the remaining budget
 
         # --- model-driven follow-ups ------------------------------------
         # A tool request outside the plan's allowlist is a recoverable model
@@ -305,8 +375,27 @@ class ResearchAgent:
                     warnings.extend(obs["notes"])
                 _ingest([self._evidence_from_search(r)
                          for r in obs.get("results", [])])
-            elif step.tool_name == "fetch_article" and obs.get("ok"):
+            elif (step.tool_name == "fetch_article" and obs.get("ok")
+                  and (obs.get("content") or "").strip()):
                 _ingest([self._evidence_from_fetch(obs)])
+
+        # --- enforce the global analysis cap ---------------------------
+        # The run may have collected more candidates than the user allowed;
+        # only ``max_results`` distinct articles are analysed and citable.
+        universe = requested_universe(query)
+        # Score relevance against the research queries, not the user's
+        # instruction-laden prose, so "return no more than 2 ... including
+        # URLs" style wording does not dilute term overlap.
+        relevance_text = " ".join(plan.search_queries) or query
+        evidence = select_evidence(candidates, query, max_results,
+                                   universe=universe,
+                                   relevance_text=relevance_text)
+        candidates_considered = len(candidates)
+        if candidates_considered > len(evidence):
+            log.info("[%s] evidence capped %d candidate(s) -> %d (max_results=%d)",
+                     self.run_id, candidates_considered, len(evidence),
+                     max_results)
+        evidence_urls = {e.get("url", "") for e in evidence if e.get("url")}
 
         # --- synthesize + validate --------------------------------------
         _emit("synthesize", {"evidence_items": len(evidence)})
@@ -319,11 +408,14 @@ class ResearchAgent:
                 ["The language model failed while synthesizing the answer."])
         draft.tool_trace = tool_trace
         _emit("validate", {})
-        answer = self.parser.validate(draft, evidence_urls)
+        answer = self.parser.validate(
+            draft, evidence_urls, query=query, plan=plan, evidence=evidence,
+            max_results=max_results)
 
         counts = {
             "max_results": max_results,
             "tool_calls": calls,
+            "candidates_considered": candidates_considered,
             "evidence_items": len(evidence),
             "sources_cited": len(answer.sources),
         }
@@ -392,24 +484,8 @@ class ResearchAgent:
 
     @staticmethod
     def _evidence_from_search(r: dict) -> dict:
-        return {
-            "title": r.get("title", ""),
-            "url": r.get("url", ""),
-            "source": r.get("source", ""),
-            "published_at": r.get("published_at"),
-            "text": r.get("snippet", ""),
-            "source_quality": r.get("source_quality", 0.0),
-            "kind": "search",
-        }
+        return evidence_from_search(r)
 
     @staticmethod
     def _evidence_from_fetch(obs: dict) -> dict:
-        return {
-            "title": obs.get("title", "") or obs.get("url", ""),
-            "url": obs.get("url", ""),
-            "source": obs.get("source", ""),
-            "published_at": obs.get("published_at"),
-            "text": obs.get("content", ""),
-            "source_quality": 0.5,
-            "kind": "article",
-        }
+        return evidence_from_fetch(obs)

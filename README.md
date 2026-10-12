@@ -10,6 +10,80 @@ over-engineered orchestration frameworks.
 
 ---
 
+## Research Stack (guide-aligned)
+
+`research-stack/` is a self-contained, fully self-hosted research stack that follows
+`SearXNG_Research_Agent_Guide.md` (no paid APIs, no search keys): **SearXNG** for meta-search,
+**Valkey** for caching, **Qdrant** for vectors, local **bge-m3** embeddings and a
+**bge-reranker-v2-m3** cross-encoder, a self-hosted OpenAI-compatible LLM (Ollama), and a
+`research_agent` service that plans searches, reads full pages and writes answers whose citations
+are validated against the sources actually retrieved.
+
+It sits **alongside** the FTSE pipeline and does not replace it: `agent/`, `nodes/`, `utils/`,
+`api/`, `web/` and the root `docker-compose.searxng.yml` / `searxng-settings.yml` are unchanged.
+`research_agent.searx_client.hit_to_article()` converts a SearXNG hit into the pipeline's `Article`
+model when the two are used together.
+
+```text
+research-stack/
+├── docker-compose.yml          # searxng + valkey + qdrant + ollama + app (+ optional tor profile)
+├── .env                        # secrets, never commit (see .env.example at the repo root)
+├── searxng/
+│   ├── settings.yml            # use_default_settings, json format, valkey DB 0, engine list
+│   └── limiter.toml            # only used if server.limiter is turned on
+├── tor/Dockerfile              # optional
+├── tools/
+│   ├── engine_health.py        # canary check: one query per engine -> OK/FAIL + engine_health.json
+│   └── bulk_sources.py         # stub: OpenAlex / PubMed / arXiv / RSS -> Qdrant (TODO)
+└── app/
+    ├── Dockerfile
+    ├── requirements.txt
+    └── research_agent/
+        ├── config.py  models.py  urls.py  cache.py  searx_client.py
+        ├── extract.py chunking.py models_ml.py store.py llm.py
+        └── prompts.py citations.py agent.py main.py cli.py
+```
+
+**Quick start**
+
+```bash
+cd research-stack
+echo "SEARXNG_SECRET=$(openssl rand -hex 32)" > .env      # never commit .env
+sh tools/init_rabbitmq_secret.sh                           # RabbitMQ password -> .env.rabbitmq (git-ignored)
+docker compose up -d --build                               # CPU-only machine? remove the ollama `deploy:` GPU block
+docker exec -it ollama ollama pull qwen2.5:14b-instruct
+
+# check which search engines are answering (SearXNG is published on 127.0.0.1:8080)
+python tools/engine_health.py http://localhost:8080        # prints OK/FAIL per engine, writes engine_health.json
+
+# async job API (app published on 127.0.0.1:8001): submit -> job id at once, then poll
+curl -s -X POST localhost:8001/research/jobs -H 'content-type: application/json' \
+  -d '{"question": "How do current methods evaluate citation faithfulness in RAG systems?"}'
+curl -s localhost:8001/research/jobs/<job_id>              # status: pending | running | completed | failed (+ result)
+curl -s localhost:8001/research/jobs/<job_id>/result       # the report only (409 until completed)
+curl -s localhost:8001/healthz                             # searxng, valkey, rabbitmq, workers online
+# POST /research still works: it enqueues a job, waits up to SYNC_WAIT_SECONDS, and returns the report
+docker compose -f docker-compose.yml config                # validate the compose file
+```
+
+**Background jobs.** The `app` container only validates requests and enqueues jobs; a `worker` container
+(Celery) runs the research. RabbitMQ (no published port, no management UI) is the broker; Valkey DB 2 stores
+job results. Each worker process loads the embedder + reranker once (~4-5 GB RAM), so `WORKER_CONCURRENCY`
+defaults to 1. Transient infrastructure errors (connection refused/reset) are retried with exponential backoff
+(`JOB_MAX_RETRIES`, default 2); an identical question submitted within 30 minutes returns the existing job
+(`"fresh": true` bypasses this).
+
+**Planning and routing.** The LLM splits the question into 2-5 sub-questions, each with a SearXNG category
+(`general`/`news`/`science`/`it`), queries and an optional time range. Output is validated; invalid data is
+repaired or replaced by a deterministic plan. Queries are routed with SearXNG's `categories` parameter, so engine
+membership stays defined in `searxng/settings.yml` only. A research job returns the plan, per-source provenance
+(engines, date, extraction status), per-sub-question coverage and warnings about failed engines/pages.
+
+`engine_health.py` needs only `httpx`. Unit tests for it run with the rest of the suite
+(`uv run pytest tests/test_engine_health.py -v`).
+
+---
+
 ## Architecture
 
 ```
@@ -157,15 +231,27 @@ flowchart TD
 - If evidence is insufficient or conflicting, the report says the answer
   could not be verified (`verified: false`, confidence 0) instead of
   inventing one.
+- `max_results` bounds the distinct articles analysed for the run (see the
+  contract above); the final answer never cites more distinct sources than
+  that, and multiple outlets reporting one transaction count as one
+  development.
+- Market-cap/financial rankings are only presented when the evidence states
+  the metric, the currency/unit and the as-of date and the values are
+  comparable; otherwise a partial result is returned and the missing evidence
+  is named. A bare number is never treated as a usable market cap.
+- For universe-scoped questions (e.g. FTSE) the answer ignores unrelated
+  global/US rankings that do not answer the question.
 - Queries explicitly asking for detailed/ranked/comprehensive research
   (`plan.detailed`) additionally get ranked findings from the gathered
-  evidence — still after the executive answer.
+  evidence — still after the executive answer, and filtered to the requested
+  universe.
 
 ### Configuration
 
 | Setting | Env | Default | Meaning |
 |---|---|---|---|
 | `max_tool_calls` | `MAX_TOOL_CALLS` | 5 | Hard bound on tool calls per query run |
+| `search_results_per_query` | `SEARCH_RESULTS_PER_QUERY` | 10 | Per `web_search` retrieval limit (≤10); independent of `max_results` |
 | `llm_timeout_s` | `LLM_TIMEOUT_S` | 90 | Per-call model timeout |
 | `llm_max_retries` | — | 3 | Bounded retries (auth failures never retried) |
 
@@ -174,6 +260,25 @@ API: `POST /api/research-runs` accepts `{"query": "...", "max_results": 20,
 `agentic` defaults to **true** for query runs (the research loop above);
 pass `"agentic": false` for the legacy deterministic pipeline. For FTSE
 company runs `agentic` keeps its original meaning (default false).
+
+### Maximum-results contract
+
+`max_results` (UI "Maximum results", CLI `--max-results`; range 1–50, default
+20) is the **maximum number of distinct articles analysed for one run** — that
+is, the size of the final evidence set after URL and near-duplicate-story
+deduplication. It is a **global** cap applied once, at the end of collection:
+
+- `evidence_items` (distinct articles analysed) ≤ `max_results`;
+- `sources_cited` ≤ `evidence_items` ≤ `max_results`;
+- ranked `findings` (detailed mode) ≤ `max_results`.
+
+It is deliberately **not** a per-search limit and does **not** cap the number
+of searches: the agent still runs its planned queries (bounded by
+`max_tool_calls`) and per-search retrieval is governed separately by
+`search_results_per_query` (≤10). This keeps search breadth — which discovers
+distinct developments — decoupled from how many results are finally analysed,
+so a request for "no more than 2 results" can still search several angles and
+then choose the two best distinct developments.
 
 CLI: `--query "..." [--max-results N] [--time-range week] [--fresh] [--no-agent]`
 (`--no-agent` selects the legacy deterministic query pipeline).
@@ -288,6 +393,14 @@ uv run uvicorn api.app:app --host 127.0.0.1 --port 8000
 cd web
 npm install
 npm run dev        # http://localhost:5173, /api proxied to :8000
+```
+
+Public URL (Cloudflare quick tunnel in front of the UI). The hostname changes on every start. Full steps, logs, and shutdown are in [TUNNEL.md](TUNNEL.md).
+
+```bash
+./scripts/tunnel.sh start
+./scripts/tunnel.sh status
+./scripts/tunnel.sh stop
 ```
 
 Production frontend build: `cd web && npm run build` (outputs `web/dist/`).

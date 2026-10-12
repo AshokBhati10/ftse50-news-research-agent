@@ -9,7 +9,7 @@
  *
  * Supported: paragraphs, headings, bold (double asterisk or double
  * underscore), italic (single asterisk or single underscore), `inline code`,
- * [links](https://…), unordered/ordered (nestable) lists, > blockquotes,
+ * [links](https://…) and bare https:// URLs, unordered/ordered (nestable) lists, > blockquotes,
  * --- horizontal rules and simple | tables |.
  */
 import React from "react";
@@ -42,7 +42,11 @@ function isWordChar(ch: string | undefined): boolean {
 }
 
 /** Render inline Markdown (bold, italic, code, links). Never emits raw HTML. */
-export function renderInline(text: string, keyPrefix = "md"): React.ReactNode[] {
+export function renderInline(
+  text: string,
+  keyPrefix = "md",
+  inLink = false
+): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   let buf = "";
   let i = 0;
@@ -73,7 +77,7 @@ export function renderInline(text: string, keyPrefix = "md"): React.ReactNode[] 
     // [label](url)
     if ((m = rest.match(/^\[([^\]]+)\]\(([^)\s]+)\)/))) {
       flush();
-      const label = renderInline(m[1], `${keyPrefix}-l${k}`);
+      const label = renderInline(m[1], `${keyPrefix}-l${k}`, true);
       const href = m[2].trim();
       out.push(
         SAFE_HREF.test(href)
@@ -92,6 +96,29 @@ export function renderInline(text: string, keyPrefix = "md"): React.ReactNode[] 
       );
       i += m[0].length;
       continue;
+    }
+
+    // Bare https://… URL (not preceded by a word character) → safe link.
+    if (!inLink && !isWordChar(prev) && (m = rest.match(/^https?:\/\/[^\s<>\])]+/))) {
+      const url = m[0].replace(/[.,;:!?'"*_]+$/, "");
+      if (SAFE_HREF.test(url)) {
+        flush();
+        out.push(
+          React.createElement(
+            "a",
+            {
+              key: `${keyPrefix}-u${k++}`,
+              href: url,
+              target: "_blank",
+              rel: "noopener noreferrer",
+              className: LINK_CLASS,
+            },
+            url
+          )
+        );
+        i += url.length;
+        continue;
+      }
     }
 
     // **bold** or __bold__

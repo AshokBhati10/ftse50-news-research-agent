@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     )
     searxng_timeout_s: float = 20.0
 
+    # ------------------------------------------------- research-stack (async job API)
+    research_stack_url: str = Field(
+        default="http://127.0.0.1:8001",
+        description="Base URL of research-stack's job API (POST /research/jobs, GET /research/jobs/{id}).",
+    )
+
     # ------------------------------------------------------------------ You.com
     you_api_key: str = Field(default="", description="You.com API key (fallback search only).")
     you_timeout_s: float = 20.0
@@ -71,6 +77,12 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------- agentic research
     max_tool_calls: int = 5  # hard bound on tool calls per query run
+    # Per-search retrieval limit. This bounds how many raw results one
+    # ``web_search`` call returns and is deliberately independent of the
+    # global ``max_results`` analysis cap, so a small requested result count can
+    # still discover several candidates to choose from. Never exceeds the
+    # search tool's own bound (10).
+    search_results_per_query: int = 10
 
     @field_validator("dedup_similarity_threshold")
     @classmethod

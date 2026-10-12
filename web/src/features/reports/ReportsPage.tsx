@@ -61,8 +61,7 @@ export default function ReportsPage() {
             <tr className="border-b border-terminal-border text-xs uppercase tracking-wide text-terminal-faint">
               <th className="px-5 py-3 font-medium">Report</th>
               <th className="px-3 py-3 font-medium">Generated</th>
-              <th className="px-3 py-3 font-medium">Companies</th>
-              <th className="px-3 py-3 font-medium">Articles</th>
+              <th className="px-3 py-3 font-medium">Items</th>
               <th className="px-3 py-3 font-medium">Download</th>
             </tr>
           </thead>
@@ -88,8 +87,9 @@ export default function ReportsPage() {
                 <td className="whitespace-nowrap px-3 py-3 text-xs text-terminal-muted">
                   {formatDateTime(r.generated_at)}
                 </td>
-                <td className="px-3 py-3 tabular-nums text-terminal-muted">{r.company_count}</td>
-                <td className="px-3 py-3 tabular-nums text-terminal-muted">{r.article_count}</td>
+                <td className="px-3 py-3 tabular-nums text-terminal-muted">
+                  {r.article_count} {r.report_type === "query" ? "findings" : "articles"}
+                </td>
                 <td className="px-3 py-3">
                   <div className="flex gap-1">
                     <a

@@ -1,34 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatConfidence,
-  formatDate,
-  formatMarketCap,
-  hostOf,
-  timeAgo,
-} from "./format";
-
-describe("formatMarketCap", () => {
-  it("formats billions/trillions with £ prefix", () => {
-    expect(formatMarketCap(236.1e9)).toBe("£236.1B");
-    expect(formatMarketCap(1.2e12)).toBe("£1.20T");
-    expect(formatMarketCap(45e6)).toBe("£45.0M");
-  });
-  it("returns an em dash for missing values", () => {
-    expect(formatMarketCap(null)).toBe("—");
-    expect(formatMarketCap(undefined)).toBe("—");
-    expect(formatMarketCap(0)).toBe("—");
-  });
-});
-
-describe("formatConfidence", () => {
-  it("formats as a percentage", () => {
-    expect(formatConfidence(0.9)).toBe("90%");
-    expect(formatConfidence(0)).toBe("0%");
-  });
-  it("handles missing values", () => {
-    expect(formatConfidence(null)).toBe("—");
-  });
-});
+import { formatDate, hostOf, timeAgo } from "./format";
 
 describe("formatDate", () => {
   it("formats ISO dates in en-GB style", () => {

@@ -6,6 +6,8 @@
 
 import type {
   CompaniesResponse,
+  DeepResearchHistoryItem,
+  DeepResearchJob,
   HealthResponse,
   ReportDetail,
   ReportsResponse,
@@ -71,6 +73,14 @@ export const api = {
     request<ResearchRun>(`/research-runs/${encodeURIComponent(id)}/cancel`, {
       method: "POST",
     }),
+  startDeepResearch: (question: string, fresh = false) =>
+    request<DeepResearchJob>("/deep-research", {
+      method: "POST",
+      body: JSON.stringify({ question, fresh }),
+    }),
+  deepResearchHistory: () => request<DeepResearchHistoryItem[]>("/deep-research"),
+  deepResearchJob: (id: string) =>
+    request<DeepResearchJob>(`/deep-research/${encodeURIComponent(id)}`),
   settingsStatus: () => request<SettingsStatus>("/settings/status"),
 
   /**

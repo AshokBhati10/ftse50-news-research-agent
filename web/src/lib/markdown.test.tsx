@@ -104,4 +104,26 @@ describe("Markdown renderer", () => {
     expect(container.querySelector("p")).toBeNull();
     expect(container.textContent).not.toContain("**");
   });
+
+  it("turns bare URLs into safe links without trailing punctuation", () => {
+    const { container } = render(
+      <Markdown text={"Source: https://example.com/a/b. See also (https://x.example/y)."} />
+    );
+    const links = Array.from(container.querySelectorAll("a"));
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "https://example.com/a/b",
+      "https://x.example/y",
+    ]);
+    expect(links[0].getAttribute("rel")).toContain("noopener");
+    expect(container.textContent).toBe(
+      "Source: https://example.com/a/b. See also (https://x.example/y)."
+    );
+  });
+
+  it("does not double-link a Markdown link whose label is a URL", () => {
+    const { container } = render(
+      <Markdown text="[https://a.example/p](https://a.example/p)" />
+    );
+    expect(container.querySelectorAll("a")).toHaveLength(1);
+  });
 });

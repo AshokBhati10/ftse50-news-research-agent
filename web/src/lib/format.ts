@@ -1,13 +1,4 @@
-/** Formatting helpers for market data and timestamps. */
-
-export function formatMarketCap(value: number | null | undefined): string {
-  if (value == null || !isFinite(value) || value <= 0) return "—";
-  const abs = Math.abs(value);
-  if (abs >= 1e12) return `£${(value / 1e12).toFixed(2)}T`;
-  if (abs >= 1e9) return `£${(value / 1e9).toFixed(1)}B`;
-  if (abs >= 1e6) return `£${(value / 1e6).toFixed(1)}M`;
-  return `£${value.toFixed(0)}`;
-}
+/** Formatting helpers for timestamps and URLs. */
 
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -30,11 +21,6 @@ export function formatDateTime(iso: string | null | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-export function formatConfidence(value: number | null | undefined): string {
-  if (value == null || !isFinite(value)) return "—";
-  return `${Math.round(value * 100)}%`;
 }
 
 export function timeAgo(iso: string | null | undefined): string {

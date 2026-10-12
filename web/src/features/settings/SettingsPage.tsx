@@ -137,7 +137,7 @@ export default function SettingsPage() {
         </dl>
         <div className="border-t border-terminal-border px-5 py-3">
           <p className="text-xs leading-relaxed text-terminal-faint">
-            This dashboard is intended for local, single-user operation and has no
+            This app is intended for local, single-user operation and has no
             login — do not expose the backend publicly without a security review.
             API keys are configured server-side only and are never sent to the
             browser.

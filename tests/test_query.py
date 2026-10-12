@@ -80,8 +80,62 @@ def test_build_topic_queries_raw_first_and_bounded():
 
 def test_build_topic_queries_no_duplicate_when_newsy():
     qs = build_topic_queries("latest news on semiconductors")
+    assert qs[0] == "latest news on semiconductors"
     assert qs.count("latest news on semiconductors") == 1
     assert len(qs) <= 3
+
+
+def test_build_topic_queries_drops_no_op_variant_and_covers_aspects():
+    # "… latest news" reduces to the same significant terms as the raw query
+    # (latest/news are stop-words), so the near-duplicate guard must drop it;
+    # genuine aspect variants must survive.
+    qs = build_topic_queries("AstraZeneca business developments", limit=3)
+    assert qs[0] == "AstraZeneca business developments"
+    assert len(qs) == 3
+    assert not any("latest news" in v for v in qs[1:])  # no-op dropped
+    assert any("announcement" in v for v in qs[1:])     # aspect kept
+
+
+def test_build_topic_queries_widens_long_queries():
+    # Long queries must still gain aspect variants (single-word additions are
+    # not treated as duplicates).
+    qs = build_topic_queries(
+        "How are interest rate changes affecting UK banks?")
+    assert len(qs) >= 2
+    assert len(set(qs)) == len(qs)
+
+
+def test_build_topic_queries_drops_variant_with_no_new_terms():
+    # Base query has no significant tokens; a variant that adds none must be
+    # dropped (regression for the empty-token-set edge case).
+    qs = build_topic_queries("latest news", limit=3)
+    assert qs[0] == "latest news"
+    assert "latest news latest news" not in qs
+    assert len(set(qs)) == len(qs)
+
+
+def test_build_topic_queries_limits_and_empty():
+    assert build_topic_queries("uk banks", limit=1) == ["uk banks"]
+    assert build_topic_queries("uk banks", limit=0) == []
+    assert build_topic_queries("   ") == []
+
+
+@pytest.mark.asyncio
+async def test_search_topic_expands_distinct_queries_when_thin(tmp_path, monkeypatch):
+    seen: list[str] = []
+
+    async def fake_searxng(query, settings, max_results=10, time_range="month"):
+        seen.append(query)
+        return [_article(1)]  # always too thin to satisfy min_useful
+
+    monkeypatch.setattr("nodes.search.searxng_search", fake_searxng)
+    settings = _settings(tmp_path)
+    outcome = await search_topic("uk banks regulation", settings, cache=None,
+                                 max_results=5)
+    assert seen[0] == "uk banks regulation"      # raw query first
+    assert len(seen) >= 2                        # coverage widened
+    assert len(set(seen)) == len(seen)           # distinct, no repeats
+    assert outcome.query == "uk banks regulation"
 
 
 def test_topic_cache_keys_isolate_queries():

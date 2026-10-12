@@ -310,6 +310,9 @@ def build_answer_report(
 ) -> QueryReport:
     """Assemble the answer-first machine-readable report."""
     answer = result.answer
+    counts = dict(result.counts)
+    counts["dated_evidence_items"] = sum(
+        1 for e in result.evidence if e.get("published_at"))
     return QueryReport(
         query=query.strip(),
         run_id=run_id,
@@ -322,7 +325,7 @@ def build_answer_report(
                                       if e.get("source")}),
         },
         warnings=result.warnings,
-        counts=result.counts,
+        counts=counts,
         findings=result.findings,
         answer=answer,
         plan_summary={
@@ -340,6 +343,19 @@ def build_answer_report(
             "max_tool_calls": settings.max_tool_calls,
         },
     )
+
+
+def _citation_links(answer, kp_index: int) -> str:
+    """Inline citation links (source + date) supporting one key point."""
+    cites = [s for s in answer.sources if kp_index in s.supports_claims]
+    if not cites:
+        return ""
+    rendered = []
+    for s in cites:
+        label = s.source_name or s.title or "source"
+        date = s.published_at.strftime("%Y-%m-%d") if s.published_at else "undated"
+        rendered.append(f"[{label}]({s.url}), {date}")
+    return " — " + "; ".join(rendered)
 
 
 def render_answer_markdown(report: QueryReport) -> str:
@@ -360,10 +376,7 @@ def render_answer_markdown(report: QueryReport) -> str:
         lines.append("## Key points")
         lines.append("")
         for i, kp in enumerate(a.key_points, start=1):
-            cites = sorted({s_idx + 1 for s_idx, s in enumerate(a.sources)
-                            if i - 1 in s.supports_claims})
-            ref = f" [{', '.join(map(str, cites))}]" if cites else ""
-            lines.append(f"{i}. {kp}{ref}")
+            lines.append(f"{i}. {kp}{_citation_links(a, i - 1)}")
         lines.append("")
     if a and a.sources:
         lines.append("## Sources")
@@ -375,20 +388,26 @@ def render_answer_markdown(report: QueryReport) -> str:
                 excerpt = " ".join(s.supporting_excerpt.split())[:280]
                 lines.append(f"   _{excerpt}…_")
         lines.append("")
-    if a and (a.limitations or a.confidence < 1.0):
+    if a:
         lines.append("## Confidence & limitations")
         lines.append("")
         lines.append(f"- Confidence: **{a.confidence:.2f}**"
                      + ("" if a.verified else " (unverified)"))
-        for lim in a.limitations:
-            lines.append(f"- {lim}")
+        if a.limitations:
+            for lim in a.limitations:
+                lines.append(f"- {lim}")
+        else:
+            lines.append("- No specific limitations recorded.")
         lines.append("")
     lines.append("## Research details")
     lines.append("")
     ps = report.plan_summary or {}
     lines.append(f"- Task type: {ps.get('task_type', 'n/a')}")
     lines.append(f"- Tool calls: {report.counts.get('tool_calls', 0)}")
-    lines.append(f"- Evidence items: {report.counts.get('evidence_items', 0)}")
+    lines.append(
+        f"- Evidence base: {report.counts.get('evidence_items', 0)} distinct "
+        f"article(s) ({report.counts.get('dated_evidence_items', 0)} dated) · "
+        f"{report.counts.get('sources_cited', 0)} cited source(s)")
     if report.warnings:
         lines.append("- Warnings:")
         for w in report.warnings:

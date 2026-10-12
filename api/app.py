@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import companies, health, reports, runs, settings as settings_routes
+from api.routes import companies, deep_research, health, reports, runs, settings as settings_routes
 from api.services.runs import RunManager
 from config.settings import Settings
 
@@ -56,7 +56,7 @@ def create_app() -> FastAPI:
         allow_headers=["Content-Type"],
     )
     for router in (health.router, companies.router, reports.router,
-                   runs.router, settings_routes.router):
+                   runs.router, settings_routes.router, deep_research.router):
         app.include_router(router, prefix="/api")
     return app
 

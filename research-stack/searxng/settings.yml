@@ -1,0 +1,134 @@
+# /etc/searxng/settings.yml  (mounted from ./searxng/settings.yml)
+# Start from SearXNG's defaults and override only what we need.
+use_default_settings: true
+
+general:
+  instance_name: "Yantra3loka Research"
+  debug: false
+  enable_metrics: true          # needed for /stats and /stats/errors
+  open_metrics: ""              # set a password to enable Prometheus /metrics (basic auth)
+
+server:
+  # Generate with:  openssl rand -hex 32   (or set SEARXNG_SECRET in .env, which overrides this)
+  secret_key: "CHANGE_ME_openssl_rand_hex_32"
+  limiter: false                # private instance used only by our app; see section 2.4
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+search:
+  safe_search: 0
+  autocomplete: ""              # no autocomplete calls for an API-only instance
+  default_lang: "en"
+  formats:
+    - html                      # keep the web UI for debugging
+    - json                      # REQUIRED for the agent; without it /search?format=json returns 403
+  ban_time_on_fail: 5
+  max_ban_time_on_fail: 120
+  suspended_times:              # how long an engine is benched after these errors (seconds)
+    SearxEngineAccessDenied: 3600
+    SearxEngineCaptcha: 3600
+    SearxEngineTooManyRequests: 900
+    cf_SearxEngineCaptcha: 86400
+    cf_SearxEngineAccessDenied: 86400
+    recaptcha_SearxEngineCaptcha: 86400
+
+valkey:
+  url: valkey://valkey:6379/0   # DB 0 for SearXNG; the app uses DB 1
+
+outgoing:
+  request_timeout: 5.0          # default per-engine timeout (s)
+  max_request_timeout: 15.0     # hard ceiling, even if an engine asks for more
+  pool_connections: 100
+  retries: 1                    # each retry uses another proxy / source IP if configured
+  enable_http2: true
+  useragent_suffix: ""          # optional contact info, e.g. "admin@yourdomain"
+  # --- Option A: rotating HTTP/SOCKS proxies (round-robin) ---
+  # proxies:
+  #   all://:
+  #     - http://proxy1:8080
+  #     - socks5h://proxy2:1080
+  # extra_proxy_timeout: 10
+  # --- Option B: everything through Tor (see section 3.2) ---
+  # proxies:
+  #   all://:
+  #     - socks5h://tor:9050
+  # using_tor_proxy: true
+  # extra_proxy_timeout: 10
+
+plugins:
+  searx.plugins.tracker_url_remover.SXNGPlugin:
+    active: true
+  searx.plugins.oa_doi_rewrite.SXNGPlugin:
+    active: true                # rewrite paywalled DOI links to open-access copies when known
+
+engines:
+  # ---------- general ----------
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: google
+    disabled: false             # off by default upstream; we enable it (blocks easily, keep redundancy)
+  - name: bing
+    disabled: false             # off by default upstream
+  - name: wikipedia
+    categories: [general, science]   # also answer background questions in "science"
+  - name: wikidata
+    disabled: false
+
+  # ---------- news ----------
+  - name: google news
+    disabled: false
+  - name: bing news
+    disabled: false
+  - name: duckduckgo news
+    disabled: false
+  - name: brave.news
+    disabled: false
+  - name: reuters
+    disabled: false
+  - name: wikinews
+    disabled: false
+
+  # ---------- science ----------
+  - name: arxiv
+    disabled: false
+    weight: 1.5                 # boost scholarly sources in the merged ranking
+  - name: google scholar
+    disabled: false
+    timeout: 8.0
+    weight: 1.5
+  - name: semantic scholar
+    disabled: false
+    weight: 1.5
+  - name: pubmed
+    disabled: false
+    weight: 1.5
+  - name: crossref
+    disabled: false             # off by default upstream
+    timeout: 10.0               # upstream default is 30s; keep it under max_request_timeout
+  - name: openalex
+    disabled: false             # off by default upstream; no API key needed
+    mailto: "dev@example.com"   # replace: joins OpenAlex's "polite pool"
+    weight: 1.5
+
+  # ---------- it ----------
+  - name: github
+    disabled: false
+  - name: stackoverflow
+    disabled: false
+  - name: askubuntu
+    disabled: false
+  - name: superuser
+    disabled: false
+  - name: mdn
+    disabled: false
+  - name: pypi
+    disabled: false
+  - name: docker hub
+    disabled: false
+  - name: hackernews
+    disabled: false             # off by default upstream
+  - name: huggingface
+    disabled: false             # off by default upstream

@@ -61,3 +61,6 @@ web/.vite/
 
 # API run-state is runtime data (same policy as data/cache)
 data/cache/runs/
+
+# Public tunnel pids, logs, and the current URL (scripts/tunnel.sh)
+data/tunnel/

@@ -166,7 +166,7 @@ def task_extraction_degraded(inputs: dict) -> str:
         raise RuntimeError("simulated crawl failure")
 
     async def empty_fallback(url, settings):
-        return None
+        return None, {}
 
     orig_crawl, orig_fallback = crawl_mod._crawl4ai_extract, crawl_mod._fallback_fetch
     crawl_mod._crawl4ai_extract, crawl_mod._fallback_fetch = boom_crawl, empty_fallback

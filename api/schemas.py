@@ -13,6 +13,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from utils.models import MAX_MAX_RESULTS, MIN_MAX_RESULTS
+
 
 # ---------------------------------------------------------------------------
 # Health
@@ -160,8 +162,11 @@ class ResearchRunCreate(BaseModel):
         max_length=500,
     )
     max_results: int | None = Field(
-        default=None, ge=1, le=50,
-        description="Max articles to analyse for a query run (default 20).",
+        default=None, ge=MIN_MAX_RESULTS, le=MAX_MAX_RESULTS,
+        description="Global cap on the number of distinct articles analysed "
+                    "for a query run, applied after URL/story deduplication "
+                    "across the whole run (never a per-search limit). "
+                    "Default 20.",
     )
     time_range: str | None = Field(
         default=None,

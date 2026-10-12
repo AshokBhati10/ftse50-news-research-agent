@@ -1,0 +1,21 @@
+# torch is installed separately in the Dockerfile (CPU wheel) to keep the image small.
+#
+# Derived from the repo's pyproject.toml: only the packages research_agent actually imports,
+# using the stricter lower bound where pyproject and the guide differ.
+# (pyproject's pydantic-ai, yfinance, crawl4ai, pandas, ... are used by the FTSE pipeline,
+#  not by this container, so they are deliberately left out of the image.)
+httpx>=0.27           # pyproject + guide
+pydantic>=2.7         # pyproject (request model in main.py)
+fastapi>=0.143.0      # pyproject (guide: >=0.110)
+uvicorn[standard]>=0.54.0   # pyproject (guide: >=0.29)
+sentence-transformers>=3.0  # guide (pyproject: >=2.7)
+
+# Guide-required libraries not present in pyproject.toml
+redis>=5.0            # async client; talks to Valkey unchanged
+qdrant-client>=1.10   # query_points API
+trafilatura>=2.0
+pymupdf>=1.24.3       # "import pymupdf"
+playwright>=1.45
+feedparser>=6.0       # RSS ingestion (section 9)
+# crawl4ai>=0.7       # optional: nicer JS fallback; run `crawl4ai-setup` after installing
+celery>=5.4           # background jobs; RabbitMQ broker (amqp) and Valkey result backend use redis-py/kombu

@@ -187,3 +187,41 @@ export interface ArticleWithCompany extends ReportArticle {
   key_finding?: string;
   significance?: string;
 }
+
+/* ----------------------- Deep research (async job API) ------------------- */
+
+export type DeepJobStatus = "pending" | "running" | "completed" | "failed";
+
+export interface DeepResearchResult {
+  question: string;
+  answer_markdown: string;
+  citations: { number: number; url: string; title: string; source: string; date: string | null }[];
+  sub_questions: string[];
+  rounds: number;
+  queries_run: string[];
+  open_gaps: string[];
+  plan: { sub_question: string; category: string; time_range: string | null; queries: string[] }[];
+  sources: {
+    url: string;
+    title: string;
+    source: string;
+    engines: string[];
+    published: string | null;
+    extraction: "extracted" | "failed" | "snippet_only" | "duplicate_text" | "not_fetched";
+  }[];
+  warnings: string[];
+  coverage: Record<string, boolean>;
+}
+
+export type DeepResearchHistoryItem = Pick<DeepResearchJob, "job_id" | "status" | "question" | "created_at">;
+
+export interface DeepResearchJob {
+  job_id: string;
+  status: DeepJobStatus;
+  question?: string;
+  created_at?: string;
+  retrying?: boolean;
+  deduplicated?: boolean;
+  error?: string;
+  result?: DeepResearchResult;
+}

@@ -4,7 +4,7 @@
  */
 import { ExternalLink } from "lucide-react";
 import type { ArticleWithCompany } from "../types";
-import { formatConfidence, formatDate, hostOf } from "../lib/format";
+import { formatDate, hostOf } from "../lib/format";
 import { Badge, Dialog, impactTone, sentimentTone } from "./ui";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -46,9 +46,6 @@ export default function ArticleDialog({
             )}
             <Badge tone={sentimentTone(article.sentiment)}>{article.sentiment}</Badge>
             <Badge tone={impactTone(article.impact)}>{article.impact} impact</Badge>
-            <span className="text-xs text-terminal-muted">
-              {formatConfidence(article.confidence)} confidence
-            </span>
           </div>
 
           <dl className="divide-y divide-terminal-border/60">
