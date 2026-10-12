@@ -8,7 +8,7 @@ Built **base-first**: a reliable deterministic pipeline first, then the agentic
 layer (Pydantic AI) on top. No LangGraph, no Tavily, no DuckDuckGo, no
 over-engineered orchestration frameworks.
 
----
+----
 
 ## Research Stack (guide-aligned)
 
